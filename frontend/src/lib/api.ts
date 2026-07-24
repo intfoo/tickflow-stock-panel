@@ -139,6 +139,72 @@ export interface AiFinancialReport {
   created_at: string
 }
 
+// ===== 缠论分析 (czsc) =====
+export type CzscFreq = '日线' | '周线' | '月线' | '季线' | '1分钟' | '5分钟' | '15分钟' | '30分钟' | '60分钟'
+
+export interface CzscSignalEntry {
+  name: string
+  category: string
+  namespace: string
+  param_template: string
+  desc: string
+}
+export interface CzscSignalsCatalog {
+  available: boolean
+  groups: Record<string, CzscSignalEntry[]>
+  total: number
+}
+export interface CzscStatus {
+  available: boolean
+  default_signals: string[]
+}
+
+export interface CzscBar {
+  /** 日线族为 "YYYY-MM-DD"；分钟族为 "YYYY-MM-DD HH:MM" */
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+export interface CzscFx {
+  dt: string
+  price: number
+  mark: 'top' | 'bottom'
+}
+export interface CzscBi {
+  a_dt: string
+  a_price: number
+  b_dt: string
+  b_price: number
+  direction: 'up' | 'down'
+}
+export interface CzscZs {
+  sdt: string
+  edt: string
+  zd: number
+  zg: number
+}
+export interface CzscSignalMarker {
+  dt: string
+  kind: 'buy' | 'sell'
+  label: string
+  price: number
+}
+export interface CzscAnalyzeResponse {
+  available: boolean
+  symbol?: string
+  freq?: string
+  message?: string
+  bars?: CzscBar[]
+  fx_list?: CzscFx[]
+  bi_list?: CzscBi[]
+  zs_list?: CzscZs[]
+  signals?: Record<string, string>[]
+  signal_markers?: CzscSignalMarker[]
+}
+
 // ===== 个股分析 =====
 export type LevelType = 'sr' | 'pivot' | 'extreme' | 'boll' | 'keltner_s' | 'keltner_m' | 'keltner_l' | 'atr_stop' | 'gap' | 'fib' | 'round'
 
@@ -1795,6 +1861,18 @@ export const api = {
       try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
     }
   },
+
+  // ===== 缠论分析 (czsc) =====
+  czscAnalyze: (symbol: string, freq: CzscFreq = '日线', days?: number, signals?: string[]) =>
+    request<CzscAnalyzeResponse>(
+      `/api/czsc/analyze?symbol=${encodeURIComponent(symbol)}&freq=${freq}`
+      + (days ? `&days=${days}` : '')
+      + (signals?.length ? `&signals=${encodeURIComponent(signals.join(','))}` : ''),
+    ),
+  czscSignals: () =>
+    request<CzscSignalsCatalog>('/api/czsc/signals'),
+  czscStatus: () =>
+    request<CzscStatus>('/api/czsc/status'),
 
   // ===== 个股分析 =====
   stockAnalysisLevels: (symbol: string, days = 120) =>
