@@ -148,6 +148,12 @@ def analyze(repo, symbol: str, freq: str = "日线", days: int | None = None,
         if df_1m.is_empty():
             return _empty_result(symbol, freq, "分钟K数据不足（未同步或非交易日）")
 
+        # 防御: format_standard_kline / resample_bars 要求 8 列含 amount;
+        # 不同数据源 (fetch_minute_single index 实时拉取) 可能缺 amount 列 → 补 0
+        import polars as pl
+        if "amount" not in df_1m.columns:
+            df_1m = df_1m.with_columns(pl.lit(0.0).alias("amount"))
+
         if freq != "1分钟":
             import pandas as pd
             from czsc import resample_bars

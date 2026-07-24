@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.services import czsc_service
 
@@ -36,7 +36,11 @@ def analyze(
 
     repo = request.app.state.repo
     sig_list = [s.strip() for s in signals.split(",") if s.strip()] if signals else None
-    return czsc_service.analyze(repo, symbol, freq, days, sig_list)
+    try:
+        return czsc_service.analyze(repo, symbol, freq, days, sig_list)
+    except ValueError as e:
+        # 非法 freq 等 (czsc_service 校验) → 400 而非 500
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/signals")
