@@ -188,8 +188,8 @@ def analyze(repo, symbol: str, freq: str = "日线", days: int | None = None,
     signals_config = _build_signals_config(sig_names, cfg.freq_str)
     signals_result = generate_czsc_signals(bars, signals_config, init_n=cfg.init_n)
 
-    # 序列化
-    return _serialize(c, signals_result, symbol, freq)
+    # 序列化 (传原始 bars 给图表, czsc 的 c.bars_raw 是包含处理后的会丢首尾 bars)
+    return _serialize(c, signals_result, symbol, freq, bars)
 
 
 def _empty_result(symbol: str, freq: str, message: str = "") -> dict:
@@ -494,17 +494,23 @@ def _fmt_dt(ts, minute: bool = False) -> str:
     return s[:16] if minute else s[:10]
 
 
-def _serialize(c, signals_result: list[dict], symbol: str, freq: str = "日线") -> dict:
+def _serialize(c, signals_result: list[dict], symbol: str, freq: str = "日线",
+               bars: list | None = None) -> dict:
     """CZSC 对象 + 信号结果 → JSON 可序列化 dict。
 
     字段名映射: 顶分型→top, 底分型→bottom, 向上→up, 向下→down
     日期格式由 freq 决定: 分钟族 %Y-%m-%d %H:%M, 日线族 %Y-%m-%d。
+
+    bars: 原始输入 K 线 (用于图表 K 线序列)。czsc 的 c.bars_raw 是 K 线包含处理
+    (include processing) 后的 NewBars, 会合并被包含的 K 线 → 根数少于输入,
+    首尾可能丢 bars。图表 K 线应用原始 bars, fx/bi/zs 仍用 czsc 处理结果。
     """
     minute = FREQ_CONFIG.get(freq, FREQ_CONFIG["日线"]).family == "minute"
+    chart_bars = bars if bars is not None else c.bars_raw
 
-    # bars 序列化
+    # bars 序列化 (用原始输入 bars, 非 czsc 处理后的 bars_raw)
     bars_out = []
-    for bar in c.bars_raw:
+    for bar in chart_bars:
         bars_out.append({
             "date": _fmt_dt(bar.dt, minute),
             "open": round(float(bar.open), 4),
@@ -548,8 +554,8 @@ def _serialize(c, signals_result: list[dict], symbol: str, freq: str = "日线")
             entry[k] = v
         signals_out.append(entry)
 
-    # 买卖标记
-    signal_markers = _extract_signal_markers(signals_result, c.bars_raw, minute)
+    # 买卖标记 (用原始 bars 建 dt→close 映射, 非 czsc 处理后的 bars_raw)
+    signal_markers = _extract_signal_markers(signals_result, chart_bars, minute)
 
     return {
         "available": True,
