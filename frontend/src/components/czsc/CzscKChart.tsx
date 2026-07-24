@@ -44,6 +44,7 @@ interface CzscChartProps {
   biList: { a_dt: string; a_price: number; b_dt: string; b_price: number; direction: 'up' | 'down' }[]
   zsList: { sdt: string; edt: string; zd: number; zg: number }[]
   signalMarkers: { dt: string; kind: 'buy' | 'sell'; label: string; price: number }[]
+  signals?: Record<string, string>[]
   height?: number
 }
 
@@ -55,6 +56,7 @@ export function CzscKChart({
   biList,
   zsList,
   signalMarkers,
+  signals,
   height = 460,
 }: CzscChartProps) {
   const chartRef = useRef<HTMLDivElement>(null)
@@ -65,7 +67,7 @@ export function CzscKChart({
   // 数据预处理
   // date 用完整字符串：日线族 "YYYY-MM-DD"，分钟族 "YYYY-MM-DD HH:MM"（含空格）。
   // 不再 slice(0,10)，否则分钟族 dt 无法匹配 dateIndex。
-  const { dates, candle, vols, dateIndex, zoomStart, fxByDate, markerByDate } = useMemo(() => {
+  const { dates, candle, vols, dateIndex, zoomStart, fxByDate, markerByDate, signalsByDate } = useMemo(() => {
     const dates = bars.map(r => (typeof r.date === 'string' ? r.date : String(r.date)))
     const candle = bars.map(r => [r.open, r.close, r.low, r.high])
     const vols = bars.map(r => ({
@@ -78,8 +80,10 @@ export function CzscKChart({
     // date → 分型/买卖点 查找表，供 tooltip formatter 上下文追加
     const fxByDate = new Map(fxList.map(fx => [fx.dt, fx]))
     const markerByDate = new Map(signalMarkers.map(m => [m.dt, m]))
-    return { dates, candle, vols, dateIndex, zoomStart, fxByDate, markerByDate }
-  }, [bars, fxList, signalMarkers])
+    // date → 信号值 dict (供 tooltip 展示结构状态信号, 如笔表里关系/分型强弱)
+    const signalsByDate = new Map((signals ?? []).map(s => [String(s.dt ?? ''), s] as [string, Record<string, string>]))
+    return { dates, candle, vols, dateIndex, zoomStart, fxByDate, markerByDate, signalsByDate }
+  }, [bars, fxList, signalMarkers, signals])
 
   const buildOption = (): EChartsOption => {
     // 布局: 主图 / 成交量 / 缩放条
@@ -328,6 +332,28 @@ export function CzscKChart({
             const color = marker.kind === 'buy' ? THEME.bear : THEME.bull
             html += `<div style="margin-top:2px;color:${color}">● ${marker.label} ${(marker.price ?? 0).toFixed(2)}</div>`
           }
+          // 当天信号值 (结构状态信号, 如笔表里关系/分型强弱; 跳过未触发的买卖点"其他")
+          const sigs = signalsByDate.get(date)
+          if (sigs) {
+            const BAR_KEYS = new Set(['dt', 'close', 'open', 'high', 'low', 'vol', 'amount', 'symbol', 'freq', 'id'])
+            const lines: string[] = []
+            for (const [k, v] of Object.entries(sigs)) {
+              if (BAR_KEYS.has(k) || typeof v !== 'string') continue
+              if (v.startsWith('其他')) continue  // 跳过未触发的买卖点
+              // key 形如 "日线_D1_表里关系V230102" → 去掉频率前缀, 留可读部分
+              const idx = k.indexOf('_')
+              const label = idx >= 0 ? k.slice(idx + 1) : k
+              // value 形如 "向上_顶分_任意_0" → 取前两段
+              const valShort = v.split('_').slice(0, 2).join(' ')
+              lines.push(`${label}: ${valShort}`)
+            }
+            if (lines.length > 0) {
+              html += `<div style="margin-top:2px;padding-top:2px;border-top:1px dashed ${CT().grid};font-size:10px;color:${CT().tooltipText};opacity:0.85">`
+              html += lines.slice(0, 8).map(l => `<div>${l}</div>`).join('')
+              if (lines.length > 8) html += `<div style="opacity:0.6">…+${lines.length - 8}</div>`
+              html += `</div>`
+            }
+          }
           return html
         },
       },
@@ -347,7 +373,7 @@ export function CzscKChart({
     }
     chartInstRef.current.setOption(buildOption(), true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bars, fxList, biList, zsList, signalMarkers, height, theme, activeToggles])
+  }, [bars, fxList, biList, zsList, signalMarkers, signals, height, theme, activeToggles])
 
   // resize
   useEffect(() => {

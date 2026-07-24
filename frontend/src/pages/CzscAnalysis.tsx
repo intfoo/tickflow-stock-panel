@@ -222,6 +222,7 @@ function CzscAnalysisBoard({ symbol, freq }: { symbol: string; freq: CzscFreq })
             biList={biList}
             zsList={zsList}
             signalMarkers={signalMarkers}
+            signals={data.signals}
             height={480}
           />
         </div>
