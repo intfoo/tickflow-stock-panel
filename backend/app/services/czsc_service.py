@@ -278,26 +278,50 @@ def _resample_daily(df, freq_str: str):
 def _fetch_minute_series(repo, asset_type: str, symbol: str, days: int):
     """取 N 天 1 分钟 K。
 
-    stock/etf: repo.get_minute_range (持久化 parquet, 按范围读)
-    index: 逐日 kline_sync.fetch_minute_single 实时拉取拼接 (不落库)
+    stock/etf: 本地优先 (get_minute_range 读持久化 parquet) → 缺失交易日实时补拉
+               (fetch_minute_single, 不落库), 与 /api/kline/minute 降级模式对齐。
+    index:     无持久化, 逐日 fetch_minute_single 实时拉取拼接。
     """
     import polars as pl
+    from app.services import kline_sync
     end = date.today()
     start = end - timedelta(days=days * 2)
 
-    if asset_type in ("stock", "etf"):
-        df = repo.get_minute_range([symbol], start, end, asset_type=asset_type)
-        if not df.is_empty():
-            df = df.filter(pl.col("symbol") == symbol).sort("datetime")
-        return df
-
-    # index: 逐日实时拉取
-    from app.services import kline_sync
-    daily_df = repo.get_daily_asset("index", symbol, start, end)
+    # 从日K推导预期交易日列表 (stock/etf/index 都有日K)
+    daily_df = repo.get_daily_asset(asset_type, symbol, start, end)
     if daily_df.is_empty() or "date" not in daily_df.columns:
+        # 无日K无法推导交易日 → stock/etf 回退纯本地读, index 返回空
+        if asset_type in ("stock", "etf"):
+            df = repo.get_minute_range([symbol], start, end, asset_type=asset_type)
+            return df.filter(pl.col("symbol") == symbol).sort("datetime") if not df.is_empty() else df
         return pl.DataFrame()
     trade_days = [d if isinstance(d, date) else date.fromisoformat(str(d))
                   for d in daily_df["date"].to_list()][-days:]
+
+    if asset_type in ("stock", "etf"):
+        # 本地优先: 读持久化 parquet
+        df_local = repo.get_minute_range([symbol], start, end, asset_type=asset_type)
+        if not df_local.is_empty():
+            df_local = df_local.filter(pl.col("symbol") == symbol).sort("datetime")
+        # 找出本地缺失的交易日 → 实时补拉 (不落库)
+        local_days = (set(df_local["datetime"].dt.date().unique().to_list())
+                      if not df_local.is_empty() else set())
+        missing_days = [d for d in trade_days if d not in local_days]
+        if not missing_days:
+            return df_local
+        parts = [df_local] if not df_local.is_empty() else []
+        for d in missing_days:
+            try:
+                sub = kline_sync.fetch_minute_single(symbol, d, asset_type=asset_type)
+                if not sub.is_empty():
+                    parts.append(sub)
+            except Exception:  # noqa: BLE001
+                logger.warning("minute fetch failed %s %s", symbol, d, exc_info=True)
+        if not parts:
+            return pl.DataFrame()
+        return pl.concat(parts, how="diagonal_relaxed").sort("datetime")
+
+    # index: 逐日实时拉取 (无持久化)
     parts = []
     for d in trade_days:
         try:

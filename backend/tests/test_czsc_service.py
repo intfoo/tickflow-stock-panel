@@ -399,11 +399,14 @@ def test_resample_daily_quarterly():
 # Task 3: 分钟族取数
 # ---------------------------------------------------------------------------
 def test_fetch_minute_series_stock():
-    """_fetch_minute_series stock 路径: 调 get_minute_range 返回 polars DF。"""
+    """_fetch_minute_series stock 路径: 本地有数据 → 返回, 不触发实时补拉。"""
     import polars as pl
-    from datetime import datetime
+    from datetime import datetime, date
 
     class FakeRepo:
+        def get_daily_asset(self, asset_type, symbol, start, end, columns=None):
+            # 交易日列表与本地分钟数据一致 → missing_days 为空, 不触发 fetch_minute_single
+            return pl.DataFrame({"date": [date(2025, 1, 6)]})
         def get_minute_range(self, syms, start, end, asset_type="stock"):
             return pl.DataFrame({
                 "symbol": ["000001.SZ"],
@@ -418,15 +421,45 @@ def test_fetch_minute_series_stock():
 
 
 def test_fetch_minute_series_empty():
-    """_fetch_minute_series stock 路径空数据: 返回空 DF。"""
+    """_fetch_minute_series stock 路径空数据: 本地+日K均空 → 返回空 DF。"""
     import polars as pl
 
     class FakeRepo:
+        def get_daily_asset(self, asset_type, symbol, start, end, columns=None):
+            return pl.DataFrame()
         def get_minute_range(self, syms, start, end, asset_type="stock"):
             return pl.DataFrame()
 
     df = czsc_service._fetch_minute_series(FakeRepo(), "stock", "000001.SZ", 3)
     assert df.is_empty()
+
+
+def test_fetch_minute_series_live_fallback():
+    """本地无分钟K但有日K → 逐日 fetch_minute_single 实时补拉拼接 (不落库)。
+    回归: 修复前 stock/etf 本地空直接返回空, 不会实时拉。
+    """
+    import polars as pl
+    from datetime import datetime, date
+    from unittest.mock import patch
+
+    class FakeRepo:
+        def get_daily_asset(self, asset_type, symbol, start, end, columns=None):
+            return pl.DataFrame({"date": [date(2025, 1, 6), date(2025, 1, 7)]})
+        def get_minute_range(self, syms, start, end, asset_type="stock"):
+            return pl.DataFrame()  # 本地空
+
+    def fake_fetch(symbol, day, asset_type="stock"):
+        return pl.DataFrame({
+            "symbol": [symbol],
+            "datetime": [datetime(day.year, day.month, day.day, 9, 31)],
+            "open": [1.0], "high": [1.1], "low": [0.9], "close": [1.05],
+            "volume": [100], "amount": [1000],
+        })
+
+    with patch("app.services.kline_sync.fetch_minute_single", side_effect=fake_fetch):
+        df = czsc_service._fetch_minute_series(FakeRepo(), "stock", "000001.SZ", 3)
+    assert df.height == 2  # 2 个交易日各补拉 1 根
+    assert "datetime" in df.columns
 
 
 # ---------------------------------------------------------------------------
