@@ -542,8 +542,18 @@ def test_list_signals_degradation(monkeypatch):
 
 
 def test_parse_signal_desc():
-    """_parse_signal_desc 从 param_template 解析可读描述。"""
-    assert czsc_service._parse_signal_desc("{freq}_D{di}B_BUY1V221126") == "BUY1"
-    assert czsc_service._parse_signal_desc("{freq}_D{di}B_SELL1V221126") == "SELL1"
-    assert czsc_service._parse_signal_desc("{freq}_D{di}BS2辅助V230320") == "BS2辅助"
-    assert czsc_service._parse_signal_desc("{freq}_D{di}N{n}_ADTMV230603") == ""
+    """_parse_signal_desc: 前缀映射优先, 再从模板提取中文, 兜底英文片段。"""
+    # 1. 前缀映射 → 中文 (买卖点等关键信号)
+    assert czsc_service._parse_signal_desc("cxt_first_buy_V221126", "{freq}_D{di}B_BUY1V221126") == "一买"
+    assert czsc_service._parse_signal_desc("cxt_first_sell_V221126", "{freq}_D{di}B_SELL1V221126") == "一卖"
+    assert czsc_service._parse_signal_desc("cxt_second_bs_V230320", "{freq}_D{di}#{ma_type}_BS2辅助V230320") == "二类买卖点"
+    # 2. 前缀命中 → 中文 (cxt_bi_status 在前缀映射中)
+    assert czsc_service._parse_signal_desc("cxt_bi_status_V230102", "{freq}_D1_表里关系V230102") == "笔表里关系"
+    assert czsc_service._parse_signal_desc("cxt_fx_power_V221107", "{freq}_D{di}F_分型强弱V221107") == "分型强弱"
+    assert czsc_service._parse_signal_desc("cxt_three_bi_V230618", "{freq}_D{di}三笔_形态V230618") == "三笔形态"
+    # 2b. 无前缀命中但模板含中文 → 提取中文片段
+    assert czsc_service._parse_signal_desc("bar_some_V230101", "{freq}_D1_涨停V230101") == "涨停"
+    # 3. 纯英文模板无前缀命中 → 兜底英文 token
+    assert czsc_service._parse_signal_desc("tas_adtm_V230603", "{freq}_D{di}N{n}_ADTMV230603") == "ADTM"
+    # 4. 解析不到 → 空
+    assert czsc_service._parse_signal_desc("xxx", "") == ""

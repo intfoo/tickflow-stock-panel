@@ -397,21 +397,62 @@ def list_signals() -> dict:
             "category": it.get("category", ""),
             "namespace": ns,
             "param_template": it.get("param_template", ""),
-            "desc": _parse_signal_desc(it.get("param_template", "")),
+            "desc": _parse_signal_desc(it["name"], it.get("param_template", "")),
         })
 
     return {"available": True, "groups": groups, "total": len(items)}
 
 
-def _parse_signal_desc(param_template: str) -> str:
-    """从 param_template 解析可读描述 (如 BUY1/SELL1/BS2辅助)。
+def _parse_signal_desc(name: str, param_template: str) -> str:
+    """从信号名 + param_template 解析中文可读描述。
 
-    list_all_signals 无 desc 字段, 从 param_template 末尾可读片段解析。
-    解析不到则返回空字符串。
+    list_all_signals 无 desc 字段。中文描述来源优先级:
+      1. _SIGNAL_CN_PREFIX 按信号名前缀映射 (买卖点等关键信号, 模板为纯英文/混合)
+      2. 从 param_template 提取中文字符序列拼接 (多数 cxt 模板含中文如"表里关系"/"分型强弱")
+      3. 提取末尾 V 前的英文片段 (兜底)
+      4. 空字符串
     """
+    # 1. 前缀映射
+    for prefix, cn in _SIGNAL_CN_PREFIX:
+        if name.startswith(prefix):
+            return cn
+    # 2. 提取中文片段
     import re
-    m = re.search(r"(BUY\d|SELL\d|BS\d辅助|第[二三四]买卖点|[一二三]买辅助)", param_template)
+    cn = "".join(re.findall(r"[\u4e00-\u9fff]+", param_template))
+    if cn:
+        return cn
+    # 3. 末尾 V 前的英文 token (如 ADTM)
+    m = re.search(r"([A-Za-z][A-Za-z0-9]*?)V?\d*$", param_template)
     return m.group(1) if m else ""
+
+
+# 关键信号中文名 (按信号名前缀匹配; 这些模板为纯英文或"辅助"类, 中文提取不够清晰)
+# 顺序敏感: 更长/更具体的前缀放前面。
+_SIGNAL_CN_PREFIX: list[tuple[str, str]] = [
+    ("cxt_first_buy", "一买"),
+    ("cxt_first_sell", "一卖"),
+    ("cxt_second_bs", "二类买卖点"),
+    ("cxt_third_bs", "三类买卖点"),
+    ("cxt_third_buy", "三类买点"),
+    ("cxt_double_zs", "双中枢一类买卖点"),
+    ("cxt_bi_status", "笔表里关系"),
+    ("cxt_bi_base", "笔基础状态"),
+    ("cxt_bi_end", "笔结束辅助"),
+    ("cxt_bi_stop", "笔止损距离"),
+    ("cxt_bi_trend", "笔趋势形态"),
+    ("cxt_bi_zdf", "笔涨跌幅分层"),
+    ("cxt_bs", "买卖点辅助"),
+    ("cxt_decision", "决策区域"),
+    ("cxt_fx_power", "分型强弱"),
+    ("cxt_overlap", "支撑压力"),
+    ("cxt_range_oscillation", "区间震荡"),
+    ("cxt_three_bi", "三笔形态"),
+    ("cxt_five_bi", "五笔形态"),
+    ("cxt_seven_bi", "七笔形态"),
+    ("cxt_nine_bi", "九笔形态"),
+    ("cxt_eleven_bi", "十一笔形态"),
+    ("cxt_ubi_end", "UBI笔结束辅助"),
+]
 
 
 # ---------------------------------------------------------------------------

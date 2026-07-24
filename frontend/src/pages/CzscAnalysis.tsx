@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, LineChart, Loader2, AlertTriangle, PackageOpen, ListChecks } from 'lucide-react'
+import { Activity, LineChart, Loader2, AlertTriangle, PackageOpen, ListChecks, ChevronDown, Search } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockFinancialSearch } from '@/components/financials/StockFinancialSearch'
@@ -316,102 +316,158 @@ function SignalPanel({
   const groupEntries = Object.entries(groups)
   const selectedCount = selectedSignals.length
 
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [groupFilter, setGroupFilter] = useState<string>('全部')
+  const ref = useRef<HTMLDivElement>(null)
+
+  // 点击外部收起下拉
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const q = search.trim().toLowerCase()
+  const filteredEntries = useMemo(() => {
+    return groupEntries
+      .filter(([g]) => groupFilter === '全部' || g === groupFilter)
+      .map(([g, entries]) => [
+        g,
+        entries.filter(
+          (s) => !q || s.name.toLowerCase().includes(q) || (s.desc || '').toLowerCase().includes(q),
+        ),
+      ] as [string, typeof entries])
+      .filter(([, entries]) => entries.length > 0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups, groupFilter, q])
+
+  const totalFiltered = filteredEntries.reduce((n, [, e]) => n + e.length, 0)
+  const available = catalog?.available && !signalsQuery.isError && !!catalog
+
   return (
-    <div className="rounded-card border border-border/60 bg-surface/40 overflow-hidden">
-      <div className="px-3 py-2.5 border-b border-border/40 flex items-center gap-2">
+    <div ref={ref} className="relative">
+      {/* 下拉触发器 */}
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full rounded-card border border-border/60 bg-surface/40 px-3 py-2.5 flex items-center gap-2 hover:bg-surface/70 transition-colors"
+      >
         <ListChecks className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-        <span className="text-xs font-medium text-foreground">信号勾选</span>
-        <span className="text-[10px] text-muted ml-auto">{selectedCount} / {catalog?.total ?? 0}</span>
-      </div>
+        <span className="text-xs font-medium text-foreground">信号选择</span>
+        <span className="text-[10px] text-muted ml-auto tabular-nums">
+          已选 {selectedCount} / {catalog?.total ?? 0}
+        </span>
+        <ChevronDown className={`h-3.5 w-3.5 text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
 
-      <div className="p-3 space-y-2">
-        {/* 操作按钮 */}
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={onSelectAll}
-            className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors"
-          >
-            全选
-          </button>
-          <button
-            onClick={onClearAll}
-            className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors"
-          >
-            清空
-          </button>
-          <button
-            onClick={onRestoreDefault}
-            className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors"
-          >
-            默认
-          </button>
-        </div>
-
-        {/* 性能警告 */}
-        {selectedCount > 30 && (
-          <div className="flex items-start gap-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 px-2 py-1.5">
-            <AlertTriangle className="h-3 w-3 text-amber-400 shrink-0 mt-0.5" />
-            <span className="text-[10px] text-amber-300 leading-tight">
-              已选 {selectedCount} 个信号，分钟级 × 大量信号可能数秒，请耐心等待。
-            </span>
-          </div>
-        )}
-
-        {/* 信号列表 */}
-        {signalsQuery.isLoading ? (
-          <div className="flex items-center justify-center py-4">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
-          </div>
-        ) : signalsQuery.isError || !catalog || !catalog.available ? (
-          <div className="text-[10px] text-muted/60 py-3 text-center">
-            信号目录不可用（需安装 czsc 扩展）
-          </div>
-        ) : groupEntries.length === 0 ? (
-          <div className="text-[10px] text-muted/60 py-3 text-center">暂无信号</div>
-        ) : (
-          <div className="space-y-2 max-h-[400px] overflow-y-auto pr-0.5">
-            {groupEntries.map(([groupName, entries]) => (
-              <div key={groupName}>
-                <div className="text-[10px] font-medium text-muted/80 px-0.5 py-1 sticky top-0 bg-surface/80 backdrop-blur-sm">
-                  {groupName}
-                  <span className="opacity-50 ml-1">({entries.length})</span>
-                </div>
-                {entries.map((sig) => {
-                  const checked = selectedSignals.includes(sig.name)
-                  return (
-                    <label
-                      key={sig.name}
-                      className="flex items-start gap-1.5 py-0.5 px-1 -mx-1 rounded cursor-pointer hover:bg-elevated/30 transition-colors"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => onToggle(sig.name)}
-                        className="mt-0.5 h-3 w-3 shrink-0 accent-sky-400 cursor-pointer"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[10px] text-foreground truncate font-mono leading-tight">
-                          {sig.name}
-                        </div>
-                        {sig.desc && (
-                          <div className="text-[9px] text-muted/70 truncate leading-tight">
-                            {sig.desc}
-                          </div>
-                        )}
-                      </div>
-                    </label>
-                  )
-                })}
+      {/* 下拉面板 (inline 展开, 避免滚动容器裁剪) */}
+      {open && (
+        <div className="mt-1 rounded-card border border-border/60 bg-surface overflow-hidden">
+          <div className="p-2.5 space-y-2">
+            {/* 搜索 + 分组下拉 */}
+            <div className="flex items-center gap-1.5">
+              <div className="relative flex-1 min-w-0">
+                <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="搜索名称 / 中文"
+                  className="w-full h-7 pl-6 pr-2 rounded text-[11px] bg-base border border-border/50 text-foreground placeholder:text-muted/50 focus:outline-none focus:border-accent/50"
+                />
               </div>
-            ))}
-          </div>
-        )}
+              <select
+                value={groupFilter}
+                onChange={(e) => setGroupFilter(e.target.value)}
+                className="h-7 max-w-[7rem] rounded text-[11px] bg-base border border-border/50 text-secondary focus:outline-none focus:border-accent/50"
+              >
+                <option value="全部">全部分组</option>
+                {groupEntries.map(([g]) => (
+                  <option key={g} value={g}>{g}</option>
+                ))}
+              </select>
+            </div>
 
-        {/* 状态提示 */}
-        {statusQuery.isLoading && (
-          <div className="text-[9px] text-muted/50 text-center">加载默认信号…</div>
-        )}
-      </div>
+            {/* 操作按钮 */}
+            <div className="flex items-center gap-1.5">
+              <button onClick={onSelectAll} className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors">全选</button>
+              <button onClick={onClearAll} className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors">清空</button>
+              <button onClick={onRestoreDefault} className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors">默认</button>
+            </div>
+
+            {/* 性能警告 */}
+            {selectedCount > 30 && (
+              <div className="flex items-start gap-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 px-2 py-1.5">
+                <AlertTriangle className="h-3 w-3 text-amber-400 shrink-0 mt-0.5" />
+                <span className="text-[10px] text-amber-300 leading-tight">
+                  已选 {selectedCount} 个信号，分钟级 × 大量信号可能数秒，请耐心等待。
+                </span>
+              </div>
+            )}
+
+            {/* 信号列表 */}
+            {signalsQuery.isLoading ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
+              </div>
+            ) : !available ? (
+              <div className="text-[10px] text-muted/60 py-3 text-center">信号目录不可用（需安装 czsc 扩展）</div>
+            ) : totalFiltered === 0 ? (
+              <div className="text-[10px] text-muted/60 py-3 text-center">无匹配信号</div>
+            ) : (
+              <div className="space-y-2 max-h-[340px] overflow-y-auto pr-0.5">
+                {filteredEntries.map(([groupName, entries]) => (
+                  <div key={groupName}>
+                    <div className="text-[10px] font-medium text-muted/80 px-0.5 py-1 sticky top-0 bg-surface/90 backdrop-blur-sm">
+                      {groupName}
+                      <span className="opacity-50 ml-1">({entries.length})</span>
+                    </div>
+                    {entries.map((sig) => {
+                      const checked = selectedSignals.includes(sig.name)
+                      return (
+                        <label
+                          key={sig.name}
+                          className="flex items-start gap-1.5 py-0.5 px-1 -mx-1 rounded cursor-pointer hover:bg-elevated/30 transition-colors"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => onToggle(sig.name)}
+                            className="mt-0.5 h-3 w-3 shrink-0 accent-sky-400 cursor-pointer"
+                          />
+                          <div className="min-w-0 flex-1">
+                            {/* 中文描述为主, 信号名为辅 */}
+                            <div className="text-[10px] text-foreground truncate leading-tight">
+                              {sig.desc || sig.name}
+                            </div>
+                            <div className="text-[9px] text-muted/60 truncate font-mono leading-tight">
+                              {sig.name}
+                            </div>
+                          </div>
+                        </label>
+                      )
+                    })}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {statusQuery.isLoading && (
+              <div className="text-[9px] text-muted/50 text-center">加载默认信号…</div>
+            )}
+
+            {/* 完成 */}
+            <button
+              onClick={() => setOpen(false)}
+              className="w-full h-7 rounded text-[11px] bg-accent/15 hover:bg-accent/25 text-accent font-medium transition-colors"
+            >
+              完成
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
