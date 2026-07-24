@@ -319,12 +319,13 @@ export function CzscKChart({
           html += `<span>低 ${bar.low.toFixed(2)}</span>`
           html += `<span>高 ${bar.high.toFixed(2)}</span>`
           html += `</div>`
-          // 当天有分型 → 追加显示 (含分型产生时间)
+          // 当天有分型 → 追加显示 (含分型确认时间, 分型有滞后: 极值点+2根K线才确认)
           const fx = fxByDate.get(date)
           if (fx) {
             const label = fx.mark === 'top' ? '顶分型' : '底分型'
             const color = fx.mark === 'top' ? THEME.bull : THEME.bear
-            html += `<div style="margin-top:2px;color:${color}">▲ ${label} ${fx.price.toFixed(2)} <span style="opacity:0.65">${fx.dt}</span></div>`
+            const confirm = fx.confirm_dt && fx.confirm_dt !== fx.dt ? ` 确认 ${fx.confirm_dt}` : ` ${fx.dt}`
+            html += `<div style="margin-top:2px;color:${color}">▲ ${label} ${fx.price.toFixed(2)} <span style="opacity:0.65">${confirm}</span></div>`
           }
           // 当天有买卖点 → 追加显示
           const marker = markerByDate.get(date)

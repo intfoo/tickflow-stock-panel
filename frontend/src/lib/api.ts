@@ -171,6 +171,7 @@ export interface CzscBar {
 }
 export interface CzscFx {
   dt: string
+  confirm_dt?: string
   price: number
   mark: 'top' | 'bottom'
 }

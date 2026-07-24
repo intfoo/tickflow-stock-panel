@@ -523,8 +523,18 @@ def _serialize(c, signals_result: list[dict], symbol: str, freq: str = "日线",
     # 分型序列化
     fx_out = []
     for fx in c.fx_list:
+        # 分型确认时间 = 构成分型的第 3 根 K 线 (new_bars[2]) 的 dt
+        # 分型有滞后: 极值点 fx.dt 是中间 K 线, 但分型在第 3 根 K 线才确认成立
+        confirm_dt = _fmt_dt(fx.dt, minute)
+        try:
+            nb = fx.new_bars
+            if nb and len(nb) >= 3:
+                confirm_dt = _fmt_dt(nb[2].dt, minute)
+        except Exception:  # noqa: BLE001
+            logger.debug("fx new_bars unavailable, fallback confirm_dt=fx.dt", exc_info=True)
         fx_out.append({
             "dt": _fmt_dt(fx.dt, minute),
+            "confirm_dt": confirm_dt,
             "price": round(float(fx.fx), 4),
             "mark": _MARK_MAP.get(fx.mark.value, fx.mark.value),
         })
