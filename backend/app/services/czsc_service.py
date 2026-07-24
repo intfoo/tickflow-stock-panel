@@ -398,6 +398,7 @@ def list_signals() -> dict:
             "namespace": ns,
             "param_template": it.get("param_template", ""),
             "desc": _parse_signal_desc(it["name"], it.get("param_template", "")),
+            "is_bs": _is_buy_sell_signal(it["name"]),
         })
 
     return {"available": True, "groups": groups, "total": len(items)}
@@ -453,6 +454,20 @@ _SIGNAL_CN_PREFIX: list[tuple[str, str]] = [
     ("cxt_eleven_bi", "十一笔形态"),
     ("cxt_ubi_end", "UBI笔结束辅助"),
 ]
+
+
+# 买卖点信号名前缀 (这些信号触发时会在 K 线上显示买卖标记)。
+# 供 list_signals 标注 is_bs, 让前端区分"会产生K线标记"与"仅结构状态"的信号。
+_BS_SIGNAL_PREFIXES = (
+    "cxt_first_buy", "cxt_first_sell",
+    "cxt_second_bs", "cxt_third_bs", "cxt_third_buy",
+    "cxt_double_zs",
+)
+
+
+def _is_buy_sell_signal(name: str) -> bool:
+    """是否为买卖点信号 (触发时 value 以 一买/二买/三买/一卖/二卖/三卖 开头 → 生成 K 线标记)。"""
+    return name.startswith(_BS_SIGNAL_PREFIXES)
 
 
 # ---------------------------------------------------------------------------

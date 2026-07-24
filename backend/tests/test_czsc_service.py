@@ -530,6 +530,23 @@ def test_list_signals():
             assert "namespace" in item
             assert "param_template" in item
             assert "desc" in item
+            assert "is_bs" in item
+    # 一买信号应标注为买卖点
+    all_items = [it for items in result["groups"].values() for it in items]
+    first_buy = next((it for it in all_items if it["name"] == "cxt_first_buy_V221126"), None)
+    if first_buy:
+        assert first_buy["is_bs"] is True
+        assert first_buy["desc"] == "一买"
+
+
+def test_is_buy_sell_signal():
+    """买卖点信号识别: 一二三类买卖点前缀 → True, 其他 → False。"""
+    assert czsc_service._is_buy_sell_signal("cxt_first_buy_V221126") is True
+    assert czsc_service._is_buy_sell_signal("cxt_first_sell_V221126") is True
+    assert czsc_service._is_buy_sell_signal("cxt_second_bs_V230320") is True
+    assert czsc_service._is_buy_sell_signal("cxt_third_bs_V230318") is True
+    assert czsc_service._is_buy_sell_signal("cxt_bi_status_V230102") is False
+    assert czsc_service._is_buy_sell_signal("cxt_fx_power_V221107") is False
 
 
 def test_list_signals_degradation(monkeypatch):

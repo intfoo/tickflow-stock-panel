@@ -397,6 +397,14 @@ function SignalPanel({
               <button onClick={onRestoreDefault} className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors">默认</button>
             </div>
 
+            {/* 说明: 只有买卖点信号会在K线显示标记 */}
+            <div className="flex items-center gap-1.5 rounded-lg bg-sky-500/8 border border-sky-500/20 px-2 py-1">
+              <span className="text-[9px] text-sky-300/90 leading-tight">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-violet-400 align-middle mr-1" />
+                标「买卖点」的信号触发时在K线显示标记；其余为结构状态信号（不画标记）。
+              </span>
+            </div>
+
             {/* 性能警告 */}
             {selectedCount > 30 && (
               <div className="flex items-start gap-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 px-2 py-1.5">
@@ -438,9 +446,12 @@ function SignalPanel({
                             className="mt-0.5 h-3 w-3 shrink-0 accent-sky-400 cursor-pointer"
                           />
                           <div className="min-w-0 flex-1">
-                            {/* 中文描述为主, 信号名为辅 */}
-                            <div className="text-[10px] text-foreground truncate leading-tight">
-                              {sig.desc || sig.name}
+                            {/* 中文描述为主, 信号名为辅; 买卖点信号加标记 */}
+                            <div className="text-[10px] text-foreground truncate leading-tight flex items-center gap-1">
+                              <span className="truncate">{sig.desc || sig.name}</span>
+                              {sig.is_bs && (
+                                <span className="shrink-0 inline-block px-1 rounded bg-violet-500/20 text-violet-300 text-[8px] leading-none py-0.5">买卖点</span>
+                              )}
                             </div>
                             <div className="text-[9px] text-muted/60 truncate font-mono leading-tight">
                               {sig.name}

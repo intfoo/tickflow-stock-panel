@@ -148,6 +148,7 @@ export interface CzscSignalEntry {
   namespace: string
   param_template: string
   desc: string
+  is_bs?: boolean
 }
 export interface CzscSignalsCatalog {
   available: boolean
