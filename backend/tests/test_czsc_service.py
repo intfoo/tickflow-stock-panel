@@ -287,6 +287,17 @@ def test_freq_config_complete():
     assert cfg_m.init_n == 20
 
 
+def test_daily_calendar_factor():
+    """周/月/季线 default_days 是目标根数, 换算系数应使取到的日K足够 resample。
+    回归: 修复前周线 default_days=100 用 days*2=200 日历日 → 仅 ~28 周。
+    """
+    f = czsc_service._DAILY_CALENDAR_FACTOR
+    assert f["日线"] == 2
+    assert f["周线"] == 7    # 100 周 → 700 日历日 ≈ 500 交易日 ≈ 100 周
+    assert f["月线"] == 30   # 60 月 → 1800 日历日 ≈ 5 年
+    assert f["季线"] == 90   # 40 季 → 3600 日历日 ≈ 10 年
+
+
 def test_analyze_signature_daily():
     """analyze 新签名: freq 默认日线, czsc 未装时返回降级。"""
     from unittest.mock import patch

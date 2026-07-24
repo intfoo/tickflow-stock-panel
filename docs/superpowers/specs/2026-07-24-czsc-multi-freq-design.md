@@ -79,7 +79,8 @@ czsc._native (Rust/PyO3)
 **日线族**（日/周/月/季）：
 ```python
 end = date.today()
-start = end - timedelta(days=days * 2)   # 日历日×2 保险
+# days 是目标频率根数, 换算成日K日历日范围 (周/月/季需更大窗口, 否则 resample 后根数不足)
+start = end - timedelta(days=days * _DAILY_CALENDAR_FACTOR[freq])  # 日线2/周线7/月线30/季线90
 asset_type = repo.resolve_asset_type(symbol)
 df = repo.get_daily_asset(asset_type, symbol, start, end)
 if freq != "日线":

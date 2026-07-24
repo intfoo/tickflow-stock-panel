@@ -44,7 +44,7 @@ class FreqConfig:
     Attributes:
         freq_str: czsc 中文字符串 (日线/周线/月线/季线/1分钟/5分钟/15分钟/30分钟/60分钟)
         family: "daily" (日K族) | "minute" (分钟族)
-        default_days: days 不传时的默认取数窗口
+        default_days: days 不传时的默认取数窗口 (目标频率的根数; 日线族周/月/季会换算成日K日历日)
         max_days: days 上限 (clamp)
         init_n: CZSC 信号预热 bar 数 (分钟族调大)
     """
@@ -65,6 +65,17 @@ FREQ_CONFIG: dict[str, FreqConfig] = {
     "15分钟": FreqConfig("15分钟", "minute", 20, 60,  50),
     "30分钟": FreqConfig("30分钟", "minute", 40, 90,  30),
     "60分钟": FreqConfig("60分钟", "minute", 60, 120, 20),
+}
+
+# 日线族: default_days 是「目标频率根数」, 取日K时需换算成日历日范围。
+# 周/月/季 resample 后根数大幅减少, 不能用 days*2 (那是日线口径)。
+# 系数 = 1 根目标 bar 对应的日历日 (含富余, 确保取到足够日K):
+#   日线 2 日历日/根, 周线 7 (≈5交易日), 月线 30 (≈21交易日), 季线 90 (≈63交易日)
+_DAILY_CALENDAR_FACTOR: dict[str, int] = {
+    "日线": 2,
+    "周线": 7,
+    "月线": 30,
+    "季线": 90,
 }
 
 
@@ -131,7 +142,8 @@ def analyze(repo, symbol: str, freq: str = "日线", days: int | None = None,
     # --- 日线族: get_daily_asset → (周/月/季 resample) → bars ---
     if cfg.family == "daily":
         end = date.today()
-        start = end - timedelta(days=days * 2)
+        # days 是目标频率根数, 换算成日K日历日范围 (周/月/季需更大窗口)
+        start = end - timedelta(days=days * _DAILY_CALENDAR_FACTOR[freq])
         df = repo.get_daily_asset(asset_type, symbol, start, end)
 
         if df.is_empty():
