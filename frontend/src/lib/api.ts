@@ -174,6 +174,8 @@ export interface CzscFx {
   confirm_dt?: string
   price: number
   mark: 'top' | 'bottom'
+  /** 分型强度: 强/中/弱 (czsc FX.power_str) */
+  power?: '强' | '中' | '弱' | ''
 }
 export interface CzscBi {
   a_dt: string

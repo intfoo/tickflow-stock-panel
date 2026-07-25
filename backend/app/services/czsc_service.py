@@ -532,11 +532,16 @@ def _serialize(c, signals_result: list[dict], symbol: str, freq: str = "日线",
                 confirm_dt = _fmt_dt(nb[2].dt, minute)
         except Exception:  # noqa: BLE001
             logger.debug("fx new_bars unavailable, fallback confirm_dt=fx.dt", exc_info=True)
+        try:
+            power = fx.power_str  # 分型强度: 强/中/弱 (czsc FX 内置判定)
+        except Exception:  # noqa: BLE001
+            power = ""
         fx_out.append({
             "dt": _fmt_dt(fx.dt, minute),
             "confirm_dt": confirm_dt,
             "price": round(float(fx.fx), 4),
             "mark": _MARK_MAP.get(fx.mark.value, fx.mark.value),
+            "power": power,
         })
 
     # 笔序列化
@@ -641,14 +646,19 @@ _BS_VALUE_PREFIX = {
 
 
 def _extract_signal_markers(signals_result: list[dict], bars, minute: bool = False) -> list:
-    """从信号 dict list 提取买卖标记 (value 驱动)。
+    """从信号 dict list 提取买卖标记 (value 驱动, 状态变化检测)。
 
-    规则:
-      - 遍历每 bar 信号 dict 的所有 string value
-      - value 不含「其他」且以 一买/二买/三买/一卖/二卖/三卖 开头 → 生成 marker
+    czsc 的买卖点信号 (cxt_first_buy/second_bs/third_bs 等) 是**状态式**信号:
+    只要当前笔结构满足条件, 该 bar 的 signal value 就一直是 "二买" / "三卖" 等,
+    直到结构变化才转为 "其他"。因此同一状态会连续出现在多根 K 线上, 不去重会刷屏。
+
+    标记规则:
+      - 遍历每 bar 的信号 dict 每个 (sig_key, value) 键值对
+      - value 不以「其他」开头且以 一买/二买/三买/一卖/二卖/三卖 开头 → 判定为「活跃」
+      - 仅在 (sig_key) 上一个 bar 的状态为非活跃 (或不同前缀) 时输出 marker
+        → 同一 sig_key 下连续 N 根「二买」只输出第一个 bar, 避免刷屏
       - kind/label 由前缀映射 (_BS_VALUE_PREFIX)
-      - marker 取该 bar 的 close 作 price, dt 格式化
-      - 一个 bar 可能产生多个 marker (不同信号同时触发), 不去重
+      - marker 取该 bar 的 close 作 price
     """
     markers = []
 
@@ -658,21 +668,38 @@ def _extract_signal_markers(signals_result: list[dict], bars, minute: bool = Fal
         dt_key = _fmt_dt(bar.dt, minute)
         dt_close[dt_key] = float(bar.close)
 
+    # 每根 bar 的信号 dict 中, dt/close/open 等是 bar 原始字段, 不是信号 key
+    bar_keys = {"dt", "close", "open", "high", "low", "vol", "amount", "symbol", "freq", "id"}
+
+    # 每个信号 key 的上一个 bar 状态前缀 (None = 非活跃/其他)
+    prev_prefix: dict[str, str | None] = {}
+
     for sig in signals_result:
         sig_dt = _fmt_dt(sig.get("dt"), minute)
         price = dt_close.get(sig_dt)
 
-        for value in sig.values():
-            if not isinstance(value, str) or "其他" in value:
+        for sig_key, value in sig.items():
+            if sig_key in bar_keys or not isinstance(value, str):
                 continue
-            for prefix, (kind, label) in _BS_VALUE_PREFIX.items():
+
+            # 当前 bar 该 sig_key 的状态前缀
+            current_prefix: str | None = None
+            for prefix in _BS_VALUE_PREFIX:
                 if value.startswith(prefix):
-                    markers.append({
-                        "dt": sig_dt,
-                        "kind": kind,
-                        "label": label,
-                        "price": round(price, 4) if price is not None else None,
-                    })
-                    break  # 一个 value 只匹配一个前缀
+                    current_prefix = prefix
+                    break
+
+            # 仅在状态从 非活跃/其他 或 不同前缀 切换到 当前活跃前缀 时输出 marker
+            if current_prefix is not None and prev_prefix.get(sig_key) != current_prefix:
+                kind, label = _BS_VALUE_PREFIX[current_prefix]
+                markers.append({
+                    "dt": sig_dt,
+                    "kind": kind,
+                    "label": label,
+                    "price": round(price, 4) if price is not None else None,
+                })
+
+            # 始终更新 prev (包括切回 None) → 下次 "其他→二买" 转换才能被识别
+            prev_prefix[sig_key] = current_prefix
 
     return markers

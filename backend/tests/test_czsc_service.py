@@ -502,6 +502,88 @@ def test_signal_marker_extraction_value_driven():
     assert len(markers) == 3
 
 
+def test_signal_marker_state_dedup_consecutive_same():
+    """状态去重: 同一 sig_key 连续 N 根「二买」只输出首个 bar 的 marker。
+
+    czsc 的 BS2/BS3 辅助是「状态式」信号: 笔结构满足条件时, value 持续为
+    "二买_..._0" 直到结构变化才回 "其他_..._0"。不去重会在 K 线上刷出 N 个
+    连续同色 marker, 误以为是 N 个独立买卖点。
+    """
+    from datetime import datetime
+
+    class FakeBar:
+        def __init__(self, dt, close):
+            self.dt = dt
+            self.close = close
+
+    # 5 根 bar, 同一 sig_key 全部 "二买" → 期待只输出 1 个 marker
+    bars = [FakeBar(datetime(2025, 2, d), 10.0 + d) for d in range(3, 8)]
+    sigs = [
+        {"dt": datetime(2025, 2, 3), "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},
+        {"dt": datetime(2025, 2, 4), "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},
+        {"dt": datetime(2025, 2, 5), "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},
+        {"dt": datetime(2025, 2, 6), "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},
+        {"dt": datetime(2025, 2, 7), "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},
+    ]
+    markers = czsc_service._extract_signal_markers(sigs, bars)
+    assert len(markers) == 1
+    assert markers[0]["dt"] == "2025-02-03"
+    assert markers[0]["label"] == "二类买点"
+
+
+def test_signal_marker_state_dedup_with_reset():
+    """状态去重 + 重置: 状态从 二买 → 其他 → 二买 应输出 2 个 marker (状态机识别转换)。"""
+    from datetime import datetime
+
+    class FakeBar:
+        def __init__(self, dt, close):
+            self.dt = dt
+            self.close = close
+
+    bars = [FakeBar(datetime(2025, 3, d), 10.0 + d) for d in range(3, 8)]
+    sigs = [
+        {"dt": datetime(2025, 3, 3), "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},
+        {"dt": datetime(2025, 3, 4), "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},
+        {"dt": datetime(2025, 3, 5), "日线_D1#SMA#21_BS2辅助V230320": "其他_任意_任意_0"},  # 状态结束
+        {"dt": datetime(2025, 3, 6), "日线_D1#SMA#21_BS2辅助V230320": "其他_任意_任意_0"},
+        {"dt": datetime(2025, 3, 7), "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},  # 状态重启
+    ]
+    markers = czsc_service._extract_signal_markers(sigs, bars)
+    assert len(markers) == 2
+    assert markers[0]["dt"] == "2025-03-03"
+    assert markers[1]["dt"] == "2025-03-07"
+    assert all(m["label"] == "二类买点" for m in markers)
+
+
+def test_signal_marker_state_dedup_independent_signals():
+    """状态去重 per-sig-key: 不同 sig_key 各自独立计数, 不会互相覆盖。"""
+    from datetime import datetime
+
+    class FakeBar:
+        def __init__(self, dt, close):
+            self.dt = dt
+            self.close = close
+
+    bars = [FakeBar(datetime(2025, 4, d), 10.0 + d) for d in range(3, 5)]
+    sigs = [
+        # bar1: BUY1 一买 + BS2 二买 同时触发
+        {"dt": datetime(2025, 4, 3),
+         "日线_D1B_BUY1": "一买_5笔_任意_0",
+         "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},
+        # bar2: BUY1 持续 一买 (状态式) + BS2 切回 其他
+        {"dt": datetime(2025, 4, 4),
+         "日线_D1B_BUY1": "一买_5笔_任意_0",  # 持续 → 不输出 (与 bar1 同状态)
+         "日线_D1#SMA#21_BS2辅助V230320": "其他_任意_任意_0"},
+    ]
+    markers = czsc_service._extract_signal_markers(sigs, bars)
+    # bar1 出 2 个 (一买 + 二买), bar2 BUY1 与 bar1 同状态被去重, BS2 切到 None 不输出
+    assert len(markers) == 2
+    dts = [m["dt"] for m in markers]
+    assert dts == ["2025-04-03", "2025-04-03"]
+    labels = {m["label"] for m in markers}
+    assert labels == {"一类买点", "二类买点"}
+
+
 def test_build_signals_config():
     """信号名 + freq → [{name, freq}]。"""
     cfg = czsc_service._build_signals_config(["cxt_first_buy_V221126"], "5分钟")

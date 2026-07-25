@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, LineChart, Loader2, AlertTriangle, PackageOpen, ListChecks, ChevronDown, Search } from 'lucide-react'
+import { Activity, LineChart, Loader2, AlertTriangle, PackageOpen, ListChecks, ChevronDown, Search, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockFinancialSearch } from '@/components/financials/StockFinancialSearch'
@@ -119,6 +119,7 @@ function CzscAnalysisBoard({ symbol, freq }: { symbol: string; freq: CzscFreq })
   // selectedSignals 初始化为 default_signals；symbol/freq 变化时保持
   const [selectedSignals, setSelectedSignals] = useState<string[]>([])
   const [initialized, setInitialized] = useState(false)
+  const [asideCollapsed, setAsideCollapsed] = useState(false)
 
   // 当 default_signals 首次加载完成时初始化 selectedSignals
   useEffect(() => {
@@ -200,7 +201,7 @@ function CzscAnalysisBoard({ symbol, freq }: { symbol: string; freq: CzscFreq })
   const signalMarkers = data.signal_markers ?? []
 
   return (
-    <div className="grid grid-cols-[1fr_300px] gap-6 items-start">
+    <div className={`grid gap-6 items-start ${asideCollapsed ? 'grid-cols-[1fr]' : 'grid-cols-[1fr_300px]'}`}>
       {/* 左侧: 缠论图表 */}
       <div className="min-w-0 rounded-card border border-border/60 bg-surface/40 overflow-hidden">
         <div className="px-4 py-3 border-b border-border/40">
@@ -210,8 +211,15 @@ function CzscAnalysisBoard({ symbol, freq }: { symbol: string; freq: CzscFreq })
               <span className="text-sm font-medium text-foreground">缠论结构图</span>
               <span className="text-[10px] text-muted shrink-0">{data.freq || freq}</span>
             </div>
-            <div className="flex items-baseline gap-2 shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
               <span className="text-[10px] text-muted">{bars.length} 根K线</span>
+              <button
+                onClick={() => setAsideCollapsed(v => !v)}
+                title={asideCollapsed ? '展开侧栏' : '收起侧栏'}
+                className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-border/30 text-muted hover:text-foreground hover:border-border/60 transition-all"
+              >
+                {asideCollapsed ? <PanelRightOpen className="h-3 w-3" /> : <PanelRightClose className="h-3 w-3" />}
+              </button>
             </div>
           </div>
         </div>
@@ -229,6 +237,7 @@ function CzscAnalysisBoard({ symbol, freq }: { symbol: string; freq: CzscFreq })
       </div>
 
       {/* 右侧: 信号勾选面板 + 摘要侧栏 */}
+      {!asideCollapsed && (
       <aside className="self-start sticky top-0 space-y-4 max-h-[calc(100vh-120px)] overflow-y-auto">
         {/* 信号勾选面板 */}
         <SignalPanel
@@ -273,7 +282,7 @@ function CzscAnalysisBoard({ symbol, freq }: { symbol: string; freq: CzscFreq })
                     >
                       <span
                         className="shrink-0 inline-flex items-center justify-center h-4 w-4 rounded text-[9px] font-bold text-white"
-                        style={{ backgroundColor: m.kind === 'buy' ? '#2D9B65' : '#C74040' }}
+                        style={{ backgroundColor: m.kind === 'buy' ? '#C74040' : '#2D9B65' }}
                       >
                         {m.kind === 'buy' ? '买' : '卖'}
                       </span>
@@ -288,6 +297,7 @@ function CzscAnalysisBoard({ symbol, freq }: { symbol: string; freq: CzscFreq })
           </div>
         </div>
       </aside>
+      )}
     </div>
   )
 }

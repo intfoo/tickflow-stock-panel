@@ -61,6 +61,14 @@ desktop = [
     "pywebview>=5.0",
 ]
 
+# 缠论分析(分型/笔/中枢 + 信号)——czsc 1.0 Rust+Python 混合架构。
+# 功能预研 demo: 独立页「缠论分析」, 不装时该页降级提示。
+# czsc 1.0 目前为 pre-release (1.0.0-rc.x), 用 rc0 下限匹配。
+# 启用:`uv sync --extra czsc`
+czsc = [
+    "czsc>=1.0.0rc0",
+]
+
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

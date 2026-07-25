@@ -2,6 +2,7 @@ import { useEffect, useRef, useMemo, useState } from 'react'
 import { chartTheme, getTheme, useTheme } from '@/lib/theme'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
+import { Maximize2, Minimize2 } from 'lucide-react'
 
 /**
  * 缠论分析专用 K 线图表。
@@ -40,7 +41,7 @@ const TOGGLE_GROUPS: ToggleKey[] = [
 
 interface CzscChartProps {
   bars: { date: string; open: number; high: number; low: number; close: number; volume: number }[]
-  fxList: { dt: string; price: number; mark: 'top' | 'bottom' }[]
+  fxList: { dt: string; confirm_dt?: string; price: number; mark: 'top' | 'bottom'; power?: string }[]
   biList: { a_dt: string; a_price: number; b_dt: string; b_price: number; direction: 'up' | 'down' }[]
   zsList: { sdt: string; edt: string; zd: number; zg: number }[]
   signalMarkers: { dt: string; kind: 'buy' | 'sell'; label: string; price: number }[]
@@ -60,9 +61,26 @@ export function CzscKChart({
   height = 460,
 }: CzscChartProps) {
   const chartRef = useRef<HTMLDivElement>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
   const chartInstRef = useRef<ECharts | null>(null)
   const theme = useTheme()
   const [activeToggles, setActiveToggles] = useState<Set<string>>(new Set(['fx', 'bi', 'zs', 'signal']))
+  const [isFs, setIsFs] = useState(false)
+
+  // 全屏状态跟踪 (浏览器 Fullscreen API)
+  useEffect(() => {
+    const onFsChange = () => setIsFs(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => document.removeEventListener('fullscreenchange', onFsChange)
+  }, [])
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) wrapRef.current?.requestFullscreen?.().catch(() => {})
+    else document.exitFullscreen?.().catch(() => {})
+  }
+
+  // 全屏时图表高度撑满视口 (留 80px 给开关行 + padding)
+  const effectiveHeight = isFs ? Math.max(window.innerHeight - 80, 300) : height
 
   // 数据预处理
   // date 用完整字符串：日线族 "YYYY-MM-DD"，分钟族 "YYYY-MM-DD HH:MM"（含空格）。
@@ -93,21 +111,44 @@ export function CzscKChart({
     const GAP_VOL_SLIDER = 12
     const PAD_BOTTOM = 8
     const volH = VOL_PANE_H
-    const mainH = height - PAD_TOP - GAP_MAIN_VOL - volH - GAP_VOL_SLIDER - SLIDER_H - PAD_BOTTOM
+    const mainH = effectiveHeight - PAD_TOP - GAP_MAIN_VOL - volH - GAP_VOL_SLIDER - SLIDER_H - PAD_BOTTOM
     const volTop = PAD_TOP + mainH + GAP_MAIN_VOL
     const sliderBottom = PAD_BOTTOM
 
+    // 价格区间缓冲 (供分型/买卖点标注的纵向偏移基准)
+    let pricePad = 0
+    if (bars.length > 0) {
+      let hi = -Infinity, lo = Infinity
+      for (const b of bars) { if (b.high > hi) hi = b.high; if (b.low < lo) lo = b.low }
+      pricePad = (hi - lo) * 0.01 || 0
+    }
+    // 买卖点标注实际需要的轴外空间 (供 yAxis 自适应扩边, 防止 K 线贴边时标注被裁剪)
+    let topExtra = 0
+    let bottomExtra = 0
+
     // ===== 分型 markPoint =====
+    // 缩小图标并移出 K 线: 顶分型挂在最高价上方, 底分型挂在最低价下方
     const fxMarkPoints: any[] = activeToggles.has('fx')
       ? fxList
           .filter(fx => dateIndex.has(fx.dt))
           .map(fx => ({
-            coord: [fx.dt, fx.price],
-            symbol: fx.mark === 'top' ? 'triangle' : 'pin',
-            symbolSize: 12,
+            coord: [fx.dt, fx.mark === 'top' ? fx.price + pricePad * 1.2 : fx.price - pricePad * 1.2],
+            // 细杆箭头: 底分型↑(看涨红), 顶分型↓(看跌绿, 旋转180°)
+            // 路径宽高比 80:100, symbolSize 用数组保持比例 (标量会被拉伸变粗), 短杆箭头
+            symbol: 'path://M50,0 L90,50 L62,50 L62,100 L38,100 L38,50 L10,50 Z',
+            symbolSize: [8, 10],
             symbolRotate: fx.mark === 'top' ? 180 : 0,
-            itemStyle: { color: fx.mark === 'top' ? THEME.bull : THEME.bear },
-            label: { show: false },
+            // 方向语义配色: 底分型红(看涨, 同买点), 顶分型绿(看跌, 同卖点)
+            itemStyle: { color: fx.mark === 'top' ? THEME.bear : THEME.bull },
+            // 分型强度标注 (强/中/弱), 顶分型标在上方, 底分型标在下方
+            label: {
+              show: !!fx.power,
+              formatter: fx.power ?? '',
+              fontSize: 9,
+              color: fx.mark === 'top' ? THEME.bear : THEME.bull,
+              position: fx.mark === 'top' ? 'top' : 'bottom',
+              distance: 1
+            },
           }))
       : []
 
@@ -129,29 +170,56 @@ export function CzscKChart({
           ])
       : []
 
-    // ===== 买卖点 markPoint =====
-    const signalMarkPoints: any[] = activeToggles.has('signal')
-      ? signalMarkers
-          .filter(m => dateIndex.has(m.dt))
-          .map(m => ({
-            coord: [m.dt, m.price],
-            symbol: m.kind === 'buy' ? 'arrow' : 'arrow',
-            symbolSize: 14,
-            symbolRotate: m.kind === 'buy' ? 0 : 180,
-            itemStyle: { color: m.kind === 'buy' ? THEME.bear : THEME.bull },
-            label: {
-              show: true,
-              formatter: m.label,
-              fontSize: 9,
-              color: '#fff',
-              position: m.kind === 'buy' ? 'bottom' : 'top',
-              distance: 8,
-              backgroundColor: m.kind === 'buy' ? THEME.bear : THEME.bull,
-              borderRadius: 2,
-              padding: [1, 4],
-            },
-          }))
-      : []
+    // ===== 买卖点 markPoint + 点状指引线 =====
+    // 设计: 不加图标, 仅文字 (1B/2S 等), 边框无底色; 点状线从 K 线极值指向文字锚点。
+    // 同一天多个信号纵向堆叠 (递增偏移), 避免文字互相 / 与 K 线重叠。
+    const baseOffset = pricePad * 12
+    const stepOffset = pricePad * 2
+    const stackCount = new Map<string, number>()
+    const signalMarkPoints: any[] = []
+    const signalMarkLines: any[] = []
+    if (activeToggles.has('signal')) {
+      for (const m of signalMarkers) {
+        if (!dateIndex.has(m.dt)) continue
+        const bar = bars[dateIndex.get(m.dt)!]
+        const n = stackCount.get(m.dt) ?? 0
+        stackCount.set(m.dt, n + 1)
+        const dist = baseOffset + n * stepOffset
+        // 记录该侧最大外扩需求: 锚点距离 + 文字行高余量 (pricePad*4 ≈ 12px)
+        if (m.kind === 'buy') bottomExtra = Math.max(bottomExtra, dist + pricePad * 4)
+        else topExtra = Math.max(topExtra, dist + pricePad * 4)
+        const extreme = m.kind === 'buy' ? bar.low : bar.high
+        const anchor = m.kind === 'buy' ? extreme - dist : extreme + dist
+        const color = m.kind === 'buy' ? THEME.bull : THEME.bear
+        signalMarkPoints.push({
+          coord: [m.dt, anchor],
+          // 用 1px 透明圆点作 label 锚点 (symbol:'none' 会让 label 不渲染)
+          symbol: 'circle',
+          symbolSize: 1,
+          itemStyle: { color: 'transparent' },
+          label: {
+            show: true,
+            formatter: bsShort(m.label),
+            fontSize: 9,
+            fontWeight: 600,
+            color,
+            borderColor: color,
+            borderWidth: 0.5,
+            backgroundColor: 'transparent',
+            borderRadius: 2,
+            padding: [0.5, 1],
+            position: m.kind === 'buy' ? 'bottom' : 'top',
+            distance: 1,
+          },
+        })
+        // 点状线从 K 线极值指向文字锚点, 起点留出空白不贴 K 线
+        const lineStart = m.kind === 'buy' ? extreme - pricePad * 1 : extreme + pricePad
+        signalMarkLines.push([
+          { coord: [m.dt, lineStart], lineStyle: { type: 'dotted', color, width: 1 } },
+          { coord: [m.dt, anchor] },
+        ])
+      }
+    }
 
     const series: any[] = [
       {
@@ -168,6 +236,9 @@ export function CzscKChart({
         },
         markPoint: (fxMarkPoints.length > 0 || signalMarkPoints.length > 0)
           ? { data: [...fxMarkPoints, ...signalMarkPoints], animation: false }
+          : undefined,
+        markLine: signalMarkLines.length > 0
+          ? { symbol: ['none', 'none'], silent: true, animation: false, data: signalMarkLines, label: { show: false } }
           : undefined,
         markArea: zsMarkAreas.length > 0
           ? { silent: true, data: zsMarkAreas }
@@ -254,6 +325,10 @@ export function CzscKChart({
       yAxis: [
         {
           scale: true,
+          // 预留上下边距: 分型/买卖点标注位于数据极值外侧, 不扩大轴范围会被裁剪看不到。
+          // 默认 6%, 买卖点偏移较大时按其实际需求 (topExtra/bottomExtra) 自适应加宽
+          min: (v: { min: number; max: number }) => v.min - Math.max((v.max - v.min) * 0.06, bottomExtra),
+          max: (v: { min: number; max: number }) => v.max + Math.max((v.max - v.min) * 0.06, topExtra),
           splitLine: { lineStyle: { color: CT().grid } },
           axisLabel: { color: CT().text, fontSize: 10, fontFamily: 'JetBrains Mono, monospace' },
         },
@@ -264,7 +339,7 @@ export function CzscKChart({
           splitLine: { show: false },
           axisLabel: {
             color: CT().text,
-            fontSize: 9,
+            fontSize: 10,
             fontFamily: 'JetBrains Mono, monospace',
             formatter: (v: number) => fmtVol(v),
           },
@@ -323,14 +398,15 @@ export function CzscKChart({
           const fx = fxByDate.get(date)
           if (fx) {
             const label = fx.mark === 'top' ? '顶分型' : '底分型'
-            const color = fx.mark === 'top' ? THEME.bull : THEME.bear
+            const color = fx.mark === 'top' ? THEME.bear : THEME.bull
             const confirm = fx.confirm_dt && fx.confirm_dt !== fx.dt ? ` 确认 ${fx.confirm_dt}` : ` ${fx.dt}`
-            html += `<div style="margin-top:2px;color:${color}">▲ ${label} ${fx.price.toFixed(2)} <span style="opacity:0.65">${confirm}</span></div>`
+            const power = fx.power ? `(${fx.power})` : ''
+            html += `<div style="margin-top:2px;color:${color}">▲ ${label}${power} ${fx.price.toFixed(2)} <span style="opacity:0.65">${confirm}</span></div>`
           }
           // 当天有买卖点 → 追加显示
           const marker = markerByDate.get(date)
           if (marker) {
-            const color = marker.kind === 'buy' ? THEME.bear : THEME.bull
+            const color = marker.kind === 'buy' ? THEME.bull : THEME.bear
             html += `<div style="margin-top:2px;color:${color}">● ${marker.label} ${(marker.price ?? 0).toFixed(2)}</div>`
           }
           // 当天信号值 (结构状态信号, 如笔表里关系/分型强弱; 跳过未触发的买卖点"其他")
@@ -372,18 +448,23 @@ export function CzscKChart({
     if (!chartInstRef.current) {
       chartInstRef.current = echarts.init(chartRef.current, undefined, { renderer: 'canvas' })
     }
+    chartInstRef.current.resize()
     chartInstRef.current.setOption(buildOption(), true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bars, fxList, biList, zsList, signalMarkers, signals, height, theme, activeToggles])
+  }, [bars, fxList, biList, zsList, signalMarkers, signals, effectiveHeight, theme, activeToggles])
 
-  // resize
+  // resize: 窗口尺寸 + 容器尺寸 (侧栏收起/展开改变容器宽度时重绘图表)
   useEffect(() => {
     const inst = chartInstRef.current
     if (!inst) return
     const onResize = () => inst.resize()
     window.addEventListener('resize', onResize)
+    const el = chartRef.current
+    const ro = new ResizeObserver(() => inst.resize())
+    if (el) ro.observe(el)
     return () => {
       window.removeEventListener('resize', onResize)
+      ro.disconnect()
       inst.dispose()
       chartInstRef.current = null
     }
@@ -401,7 +482,7 @@ export function CzscKChart({
   const zsEmpty = zsList.length === 0
 
   return (
-    <div>
+    <div ref={wrapRef} className={isFs ? 'bg-base p-4' : undefined}>
       {/* 开关按钮组 */}
       <div className="flex flex-wrap items-center gap-1.5 mb-2">
         <span className="text-[10px] text-muted mr-1">缠论结构</span>
@@ -426,8 +507,16 @@ export function CzscKChart({
             </button>
           )
         })}
+        {/* 全屏切换 */}
+        <button
+          onClick={toggleFullscreen}
+          title={isFs ? '退出全屏' : '全屏'}
+          className="ml-auto inline-flex items-center justify-center h-6 w-6 rounded-md border border-border/30 text-muted hover:text-foreground hover:border-border/60 transition-all"
+        >
+          {isFs ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+        </button>
       </div>
-      <div ref={chartRef} style={{ width: '100%', height }} />
+      <div ref={chartRef} style={{ width: '100%', height: effectiveHeight }} />
     </div>
   )
 }
@@ -437,4 +526,15 @@ function fmtVol(v: number): string {
   if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
   if (v >= 1e4) return (v / 1e4).toFixed(0) + '万'
   return v.toFixed(0)
+}
+
+/** 买卖点标签简写: "一类买点" → "1B", "二类卖点" → "2S", "三类买点" → "3B" */
+function bsShort(label: string): string {
+  const m = label.match(/([一二三])类([买卖])点/)
+  if (m) {
+    const num = (m[1] === '一' ? 1 : m[1] === '二' ? 2 : 3)
+    const bs = m[2] === '买' ? 'B' : 'S'
+    return `${num}${bs}`
+  }
+  return label.replace(/[类点]/g, '')
 }
