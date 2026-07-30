@@ -23,6 +23,7 @@ def analyze(
     freq: str = Query("日线", description="日线/周线/月线/季线/1分钟/5分钟/15分钟/30分钟/60分钟"),
     days: int | None = Query(None, ge=1, description="取近 N 天; 不传则用该 freq 默认值"),
     signals: str | None = Query(None, description="逗号分隔信号名; 不传则用默认推荐集"),
+    signal_params: str | None = Query(None, description='JSON: {信号名: {参数名:值}}; 不传则用默认参数'),
 ):
     """缠论分析 — 分型/笔/中枢/买卖点信号。
 
@@ -36,8 +37,15 @@ def analyze(
 
     repo = request.app.state.repo
     sig_list = [s.strip() for s in signals.split(",") if s.strip()] if signals else None
+    sig_params = None
+    if signal_params:
+        import json
+        try:
+            sig_params = json.loads(signal_params)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="signal_params 不是合法 JSON") from None
     try:
-        return czsc_service.analyze(repo, symbol, freq, days, sig_list)
+        return czsc_service.analyze(repo, symbol, freq, days, sig_list, sig_params)
     except ValueError as e:
         # 非法 freq 等 (czsc_service 校验) → 400 而非 500
         raise HTTPException(status_code=400, detail=str(e)) from e

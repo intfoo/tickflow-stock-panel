@@ -83,13 +83,41 @@ _DAILY_CALENDAR_FACTOR: dict[str, int] = {
 # 默认推荐信号 + namespace 中文映射
 # ---------------------------------------------------------------------------
 DEFAULT_SIGNALS: list[str] = [
-    "cxt_bi_status_V230102",       # 笔状态
+    "cxt_bi_status_V230102",       # 笔表里关系 (笔状态核心)
+    "cxt_bi_end_V230618",          # 笔结束辅助
     "cxt_first_buy_V221126",       # 一买
     "cxt_first_sell_V221126",      # 一卖
     "cxt_second_bs_V230320",       # 二类买卖点
-    "cxt_third_bs_V230318",        # 三类买卖点
-    "cxt_bi_base_V230228",         # 笔基础状态
+    "cxt_third_bs_V230319",        # 三类买卖点 (增强版)
+    "cxt_double_zs_V230311",       # 中枢背驰 (双中枢一类买卖点)
+    "cxt_three_bi_V230618",        # 三笔背驰
+    "cxt_five_bi_V230619",         # 五笔背驰
+    "cxt_seven_bi_V230620",        # 七笔背驰
 ]
+
+# 可勾选信号白名单: czsc 共 222 个信号, 多为冷门辅助; 此处只留知名缠论结构 + 经典 TA,
+# 过滤掉杂项 (jcc 形态 / zdy 自定义 / pressure / 大量 bar/tas 变体)。
+# DEFAULT_SIGNALS 必须全部包含在内 (否则默认信号不在可选列表)。
+SIGNAL_WHITELIST: set[str] = {
+    # — 缠论结构: 笔状态 —
+    "cxt_bi_status_V230102", "cxt_bi_end_V230618", "cxt_bi_base_V230228",
+    "cxt_bi_trend_V230913", "cxt_bi_zdf_V230601", "cxt_bi_stop_V230815",
+    # — 缠论结构: 买卖点 —
+    "cxt_first_buy_V221126", "cxt_first_sell_V221126",
+    "cxt_second_bs_V230320", "cxt_second_bs_V240524",
+    "cxt_third_bs_V230318", "cxt_third_bs_V230319", "cxt_third_buy_V230228",
+    # — 缠论结构: 中枢 / 背驰 / 形态 —
+    "cxt_double_zs_V230311", "cxt_range_oscillation_V230620", "cxt_overlap_V240612",
+    "cxt_three_bi_V230618", "cxt_five_bi_V230619", "cxt_seven_bi_V230620",
+    "cxt_nine_bi_V230621", "cxt_eleven_bi_V230622",
+    # — 缠论结构: 分型 / 决策 / 辅助 —
+    "cxt_fx_power_V221107", "cxt_decision_V240526", "cxt_bs_V240526", "cxt_ubi_end_V230816",
+    # — 经典 TA 指标 —
+    "tas_macd_bc_V230803", "tas_macd_base_V230320", "tas_ma_base_V230313",
+    "tas_boll_bc_V221118", "tas_kdj_base_V221101", "tas_rsi_base_V230227",
+    # — 经典 K 线特征 —
+    "bar_zdt_V230331", "bar_amount_acc_V230214",
+}
 
 NAMESPACE_LABEL: dict[str, str] = {
     "cxt": "缠论结构",
@@ -107,7 +135,8 @@ NAMESPACE_LABEL: dict[str, str] = {
 # 主入口
 # ---------------------------------------------------------------------------
 def analyze(repo, symbol: str, freq: str = "日线", days: int | None = None,
-             signals: list[str] | None = None) -> dict:
+             signals: list[str] | None = None,
+             signal_params: dict[str, dict] | None = None) -> dict:
     """缠论分析主入口。
 
     Args:
@@ -185,7 +214,7 @@ def analyze(repo, symbol: str, freq: str = "日线", days: int | None = None,
 
     # 信号生成
     sig_names = signals if signals else DEFAULT_SIGNALS
-    signals_config = _build_signals_config(sig_names, cfg.freq_str)
+    signals_config = _build_signals_config(sig_names, cfg.freq_str, signal_params)
     signals_result = generate_czsc_signals(bars, signals_config, init_n=cfg.init_n)
 
     # 序列化 (传原始 bars 给图表, czsc 的 c.bars_raw 是包含处理后的会丢首尾 bars)
@@ -367,9 +396,18 @@ def _df_to_bars(df, freq_str: str) -> list:
 # ---------------------------------------------------------------------------
 # 信号配置构建
 # ---------------------------------------------------------------------------
-def _build_signals_config(signal_names: list[str], freq_str: str) -> list[dict]:
-    """信号名列表 + freq_str → czsc signals_config 格式 [{name, freq}]。"""
-    return [{"name": n, "freq": freq_str} for n in signal_names]
+def _build_signals_config(
+    signal_names: list[str],
+    freq_str: str,
+    signal_params: dict[str, dict] | None = None,
+) -> list[dict]:
+    """信号名列表 + freq_str → czsc signals_config 格式 [{name, freq, ...params}]。
+
+    signal_params: 可选 {信号名: {参数名: 值}}, 合并到对应信号 config (参数透传)。
+    不传则只含 name+freq, czsc 信号函数内部用默认参数 (如 di=1)。
+    """
+    signal_params = signal_params or {}
+    return [{"name": n, "freq": freq_str, **signal_params.get(n, {})} for n in signal_names]
 
 
 # ---------------------------------------------------------------------------
@@ -390,18 +428,41 @@ def list_signals() -> dict:
 
     groups: dict[str, list] = {}
     for it in items:
+        if it["name"] not in SIGNAL_WHITELIST:
+            continue
         ns = it.get("namespace", "other")
         label = NAMESPACE_LABEL.get(ns, ns)
+        param_template = it.get("param_template", "")
         groups.setdefault(label, []).append({
             "name": it["name"],
             "category": it.get("category", ""),
             "namespace": ns,
-            "param_template": it.get("param_template", ""),
-            "desc": _parse_signal_desc(it["name"], it.get("param_template", "")),
+            "param_template": param_template,
+            "desc": _parse_signal_desc(it["name"], param_template),
             "is_bs": _is_buy_sell_signal(it["name"]),
+            "default_params": _parse_default_params(param_template),
         })
 
-    return {"available": True, "groups": groups, "total": len(items)}
+    total = sum(len(v) for v in groups.values())
+    return {"available": True, "groups": groups, "total": total}
+
+
+def _parse_default_params(param_template: str) -> dict:
+    """从 param_template 提取占位符默认值 (供前端展示/参数透传)。
+
+    模板形如 "{freq}_D{di}B_BUY1V230102": {freq} 由 freq_str 提供 (不入 params),
+    {di}→1。常见占位符默认: di=1, n=20, timeperiod=5, ma_type="SMA"。
+    """
+    import re
+    defaults = {"di": 1, "n": 20, "timeperiod": 5, "ma_type": "SMA"}
+    params: dict = {}
+    for m in re.finditer(r"\{(\w+)\}", param_template):
+        key = m.group(1)
+        if key == "freq":
+            continue
+        if key in defaults:
+            params[key] = defaults[key]
+    return params
 
 
 def _parse_signal_desc(name: str, param_template: str) -> str:
@@ -555,7 +616,7 @@ def _serialize(c, signals_result: list[dict], symbol: str, freq: str = "日线",
             "direction": _DIR_MAP.get(bi.direction.value, bi.direction.value),
         })
 
-    # 中枢 (best-effort)
+    # 中枢: 用 czsc 官方 ZS 对象 (前3笔重叠算法, 含 gg/dd/zz/is_valid), 从 bi_list 识别
     zs_out = _extract_zs_from_bis(c.bi_list, minute)
 
     # 信号序列化 (透传 list[dict], dt 格式化, 过滤掉 bar 原始数据字段)
@@ -586,53 +647,42 @@ def _serialize(c, signals_result: list[dict], symbol: str, freq: str = "日线",
 
 
 # ---------------------------------------------------------------------------
-# 中枢提取 (best-effort)
+# 中枢提取 (用 czsc 官方 ZS 对象, 从 bi_list 识别)
 # ---------------------------------------------------------------------------
 def _extract_zs_from_bis(bi_list, minute: bool = False) -> list:
-    """从笔列表中提取中枢 (best-effort)。
+    """从笔列表识别中枢, 用 czsc 官方 ZS 对象计算区间。
 
-    算法: 遍历连续3笔, 第2、3笔价格区间重叠即为中枢。
-    中枢区间 [zd, zg] = [max(第2笔低点, 第3笔低点), min(第2笔高点, 第3笔高点)]
-    若 zd < zg 则重叠区有效。
+    CZSC 对象只算分型/笔, 不提供 zs_list; 中枢需从 bi_list 识别:
+      遍历连续3笔, 用官方 ZS(bis) 构造 → zg=min(前3笔高), zd=max(前3笔低),
+      zz=中轴, gg/dd=全段极值; is_valid() 判定有效性。有效则记录并跳过3笔。
 
-    若提取复杂或失败, 返回 [] (设计文档允许降级)。
+    相比旧版 (第2/3笔重叠自算), 改用官方 ZS::new 算法 + is_valid, 区间更准。
     """
     if not bi_list or len(bi_list) < 3:
         return []
-
-    zs_list = []
+    from czsc import ZS
+    out = []
     try:
         i = 0
-        while i < len(bi_list) - 2:
-            bi1 = bi_list[i + 1]  # 第2笔
-            bi2 = bi_list[i + 2]  # 第3笔
-
-            # 每笔的端点: fx_a 和 fx_b, 取价格区间
-            low1 = min(bi1.fx_a.fx, bi1.fx_b.fx)
-            high1 = max(bi1.fx_a.fx, bi1.fx_b.fx)
-            low2 = min(bi2.fx_a.fx, bi2.fx_b.fx)
-            high2 = max(bi2.fx_a.fx, bi2.fx_b.fx)
-
-            zd = max(low1, low2)  # 中枢下沿
-            zg = min(high1, high2)  # 中枢上沿
-
-            if zd < zg:
-                # 有效重叠 → 形成中枢
-                zs_list.append({
-                    "sdt": _fmt_dt(bi1.fx_a.dt, minute),
-                    "edt": _fmt_dt(bi2.fx_b.dt, minute),
-                    "zd": round(float(zd), 4),
-                    "zg": round(float(zg), 4),
+        while i <= len(bi_list) - 3:
+            tri = list(bi_list[i:i + 3])
+            zs = ZS(tri)
+            if zs.is_valid():
+                out.append({
+                    "sdt": _fmt_dt(zs.sdt, minute),
+                    "edt": _fmt_dt(zs.edt, minute),
+                    "zd": round(float(zs.zd), 4),
+                    "zg": round(float(zs.zg), 4),
+                    "zz": round(float(zs.zz), 4),
+                    "gg": round(float(zs.gg), 4),
+                    "dd": round(float(zs.dd), 4),
                 })
-                # 跳到中枢之后继续找
                 i += 3
             else:
                 i += 1
     except Exception:  # noqa: BLE001
         logger.debug("ZS extraction failed, returning empty list", exc_info=True)
-        return []
-
-    return zs_list
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -644,9 +694,15 @@ _BS_VALUE_PREFIX = {
     "三买": ("buy", "三类买点"), "三卖": ("sell", "三类卖点"),
 }
 
+# 买卖点优先级 (数值越小越高): 同日同向多 marker 取最高优先级 label
+_BS_PRIORITY = {
+    "一类买点": 1, "二类买点": 2, "三类买点": 3,
+    "一类卖点": 1, "二类卖点": 2, "三类卖点": 3,
+}
 
-def _extract_signal_markers(signals_result: list[dict], bars, minute: bool = False) -> list:
-    """从信号 dict list 提取买卖标记 (value 驱动, 状态变化检测)。
+
+def _detect_raw_markers(signals_result: list[dict], bars, minute: bool = False) -> list[dict]:
+    """per-key 状态切换检测 → raw markers (未做全局去重)。
 
     czsc 的买卖点信号 (cxt_first_buy/second_bs/third_bs 等) 是**状态式**信号:
     只要当前笔结构满足条件, 该 bar 的 signal value 就一直是 "二买" / "三卖" 等,
@@ -659,6 +715,8 @@ def _extract_signal_markers(signals_result: list[dict], bars, minute: bool = Fal
         → 同一 sig_key 下连续 N 根「二买」只输出第一个 bar, 避免刷屏
       - kind/label 由前缀映射 (_BS_VALUE_PREFIX)
       - marker 取该 bar 的 close 作 price
+
+    注意: 本函数仅做 per-key 去重; 多 sig_key 同日触发 / 连续同向由 _dedupe_markers 处理。
     """
     markers = []
 
@@ -703,3 +761,62 @@ def _extract_signal_markers(signals_result: list[dict], bars, minute: bool = Fal
             prev_prefix[sig_key] = current_prefix
 
     return markers
+
+
+def _extract_signal_markers(signals_result: list[dict], bars, minute: bool = False) -> list[dict]:
+    """提取买卖标记 = per-key 状态检测 + 全局去重 (同日合并 + 买卖交替)。
+
+    缠论同级别买卖点不连续: per-key 去重仅保证单信号不刷屏; 多 sig_key 同日触发 /
+    连续同向由 _dedupe_markers 全局后处理, 使最终序列买卖严格交替、同日至多一个。
+    """
+    raw = _detect_raw_markers(signals_result, bars, minute)
+    return _dedupe_markers(raw)
+
+
+def _dedupe_markers(markers: list[dict]) -> list[dict]:
+    """对 per-key 去重后的买卖标记做全局后处理, 使其符合缠论「同级别买卖点不连续」语义。
+
+    1. 按 dt 排序
+    2. 同日合并: 同向取优先级最高 (一>二>三); 异向冲突 (同日又买又卖) 视为噪声丢弃该日全部
+    3. 全局买卖交替: 连续同向段内取优先级最高 (一>二>三); 段间方向必交替 (买后必先卖再买)
+    """
+    if not markers:
+        return []
+
+    # 1. 排序 (稳定, 保留同日原始顺序)
+    markers.sort(key=lambda m: m["dt"])
+
+    # 2. 同日合并
+    merged: list[dict] = []
+    i = 0
+    n = len(markers)
+    while i < n:
+        dt = markers[i]["dt"]
+        same_day = [markers[i]]
+        j = i + 1
+        while j < n and markers[j]["dt"] == dt:
+            same_day.append(markers[j])
+            j += 1
+        i = j
+        # 同日又买又卖 → 矛盾, 丢弃
+        if len({m["kind"] for m in same_day}) > 1:
+            continue
+        # 同向多个 → 取优先级最高 (priority 最小)
+        merged.append(min(same_day, key=lambda m: _BS_PRIORITY.get(m["label"], 99)))
+
+    # 3. 全局买卖交替: 连续同向段内取优先级最高 (一>二>三), 段间方向必交替
+    #    缠论: 同级别买后必先卖再买; 段内若混入更高优先级买点 (如一买), 覆盖较早的二买/三买
+    result: list[dict] = []
+    seg: list[dict] = []
+    seg_kind: str | None = None
+    for m in merged:
+        if m["kind"] != seg_kind:
+            if seg:
+                result.append(min(seg, key=lambda x: _BS_PRIORITY.get(x["label"], 99)))
+            seg = [m]
+            seg_kind = m["kind"]
+        else:
+            seg.append(m)
+    if seg:
+        result.append(min(seg, key=lambda x: _BS_PRIORITY.get(x["label"], 99)))
+    return result

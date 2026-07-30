@@ -17,6 +17,7 @@ import { Maximize2, Minimize2 } from 'lucide-react'
 const THEME = {
   bull: '#C74040',
   bear: '#2D9B65',
+  bi: '#F59E0B',
   volUp: 'rgba(240,68,56,0.5)',
   volDown: 'rgba(18,183,106,0.5)',
   zs: 'rgba(59,130,246,0.12)',
@@ -257,7 +258,7 @@ export function CzscKChart({
     // ===== 笔 line series =====
     // 把 bi 端点展平为 [date, price] 数组，画成一条折线
     // 涨笔红色，跌笔绿色 —— 但 ECharts line series 的每段颜色无法直接按段区分，
-    // 这里用分段策略：每条 bi 作为一个独立 line series（两点的折线），颜色按 direction
+    // 这里用分段策略：每条 bi 作为一个独立 line series（两点的折线），统一暖黄色
     if (activeToggles.has('bi')) {
       for (const bi of biList) {
         if (!dateIndex.has(bi.a_dt) || !dateIndex.has(bi.b_dt)) continue
@@ -278,10 +279,10 @@ export function CzscKChart({
           silent: true,  // 不参与 tooltip / hover，避免 13 条笔全部刷屏
           lineStyle: {
             width: 1.5,
-            color: bi.direction === 'up' ? THEME.bull : THEME.bear,
+            color: THEME.bi,
           },
           itemStyle: {
-            color: bi.direction === 'up' ? THEME.bull : THEME.bear,
+            color: THEME.bi,
           },
           connectNulls: true,  // 端点间有 '-' 占位，需连接才能画出笔线段
         })
@@ -420,14 +421,14 @@ export function CzscKChart({
               // key 形如 "日线_D1_表里关系V230102" → 去掉频率前缀, 留可读部分
               const idx = k.indexOf('_')
               const label = idx >= 0 ? k.slice(idx + 1) : k
-              // value 形如 "向上_顶分_任意_0" → 取前两段
-              const valShort = v.split('_').slice(0, 2).join(' ')
+              // value 形如 "向上_顶分_任意_0" → 取 v1_v2_v3 (去 score), 过滤"任意"占位段
+              const valShort = v.split('_').slice(0, 3).filter(seg => seg !== '任意').join(' ')
               lines.push(`${label}: ${valShort}`)
             }
             if (lines.length > 0) {
               html += `<div style="margin-top:2px;padding-top:2px;border-top:1px dashed ${CT().grid};font-size:10px;color:${CT().tooltipText};opacity:0.85">`
-              html += lines.slice(0, 8).map(l => `<div>${l}</div>`).join('')
-              if (lines.length > 8) html += `<div style="opacity:0.6">…+${lines.length - 8}</div>`
+              html += lines.slice(0, 20).map(l => `<div>${l}</div>`).join('')
+              if (lines.length > 20) html += `<div style="opacity:0.6">…+${lines.length - 20}</div>`
               html += `</div>`
             }
           }

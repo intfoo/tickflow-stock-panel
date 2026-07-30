@@ -242,7 +242,7 @@ def test_signal_marker_extraction():
         bar.close = sig["close"]
         bars.append(bar)
 
-    markers = czsc_service._extract_signal_markers(signals_result, bars)
+    markers = czsc_service._detect_raw_markers(signals_result, bars)
 
     # 应该有 4 个 marker: bar1 buy, bar2 sell, bar4 buy+sell
     assert len(markers) == 4
@@ -493,7 +493,7 @@ def test_signal_marker_extraction_value_driven():
         {"dt": datetime(2025, 1, 7), "日线_D1BS2辅助V230320": "二买_任意_任意_0"},  # 触发 buy 二类
         {"dt": datetime(2025, 1, 7), "日线_D1BS3辅助": "三卖_任意_任意_0"},         # 触发 sell 三类
     ]
-    markers = czsc_service._extract_signal_markers(sigs, bars)
+    markers = czsc_service._detect_raw_markers(sigs, bars)
     kinds = {(m["kind"], m["label"]) for m in markers}
     assert ("buy", "一类买点") in kinds
     assert ("buy", "二类买点") in kinds
@@ -525,7 +525,7 @@ def test_signal_marker_state_dedup_consecutive_same():
         {"dt": datetime(2025, 2, 6), "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},
         {"dt": datetime(2025, 2, 7), "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},
     ]
-    markers = czsc_service._extract_signal_markers(sigs, bars)
+    markers = czsc_service._detect_raw_markers(sigs, bars)
     assert len(markers) == 1
     assert markers[0]["dt"] == "2025-02-03"
     assert markers[0]["label"] == "二类买点"
@@ -548,7 +548,7 @@ def test_signal_marker_state_dedup_with_reset():
         {"dt": datetime(2025, 3, 6), "日线_D1#SMA#21_BS2辅助V230320": "其他_任意_任意_0"},
         {"dt": datetime(2025, 3, 7), "日线_D1#SMA#21_BS2辅助V230320": "二买_任意_任意_0"},  # 状态重启
     ]
-    markers = czsc_service._extract_signal_markers(sigs, bars)
+    markers = czsc_service._detect_raw_markers(sigs, bars)
     assert len(markers) == 2
     assert markers[0]["dt"] == "2025-03-03"
     assert markers[1]["dt"] == "2025-03-07"
@@ -575,13 +575,69 @@ def test_signal_marker_state_dedup_independent_signals():
          "日线_D1B_BUY1": "一买_5笔_任意_0",  # 持续 → 不输出 (与 bar1 同状态)
          "日线_D1#SMA#21_BS2辅助V230320": "其他_任意_任意_0"},
     ]
-    markers = czsc_service._extract_signal_markers(sigs, bars)
+    markers = czsc_service._detect_raw_markers(sigs, bars)
     # bar1 出 2 个 (一买 + 二买), bar2 BUY1 与 bar1 同状态被去重, BS2 切到 None 不输出
     assert len(markers) == 2
     dts = [m["dt"] for m in markers]
     assert dts == ["2025-04-03", "2025-04-03"]
     labels = {m["label"] for m in markers}
     assert labels == {"一类买点", "二类买点"}
+
+
+def test_dedupe_markers_same_day_merge_and_alternation():
+    """_dedupe_markers: 同日合并(同向取最高优先级, 异向丢弃) + 全局买卖交替(段内最高优先级)。"""
+
+    def _m(dt, kind, label):
+        return {"dt": dt, "kind": kind, "label": label, "price": 1.0}
+
+    # 同日同向多 marker → 取最高优先级 (一买>二买>三买)
+    assert czsc_service._dedupe_markers(
+        [_m("2025-01-01", "buy", "三类买点"), _m("2025-01-01", "buy", "二类买点")]
+    ) == [_m("2025-01-01", "buy", "二类买点")]
+
+    # 同日异向 (又买又卖) → 矛盾丢弃
+    assert czsc_service._dedupe_markers(
+        [_m("2025-01-01", "buy", "一类买点"), _m("2025-01-01", "sell", "一类卖点")]
+    ) == []
+
+    # 连续同向段内取最高优先级 (一买覆盖较早二买), 段间方向交替
+    out = czsc_service._dedupe_markers([
+        _m("2025-01-01", "buy", "二类买点"),
+        _m("2025-01-02", "buy", "一类买点"),
+        _m("2025-01-03", "sell", "一类卖点"),
+    ])
+    assert out == [_m("2025-01-02", "buy", "一类买点"), _m("2025-01-03", "sell", "一类卖点")]
+
+    # 多段买卖交替, 各段取段内最高优先级
+    out = czsc_service._dedupe_markers([
+        _m("2025-01-01", "buy", "三类买点"), _m("2025-01-02", "buy", "二类买点"),
+        _m("2025-01-03", "sell", "三类卖点"), _m("2025-01-04", "sell", "二类卖点"),
+        _m("2025-01-05", "buy", "一类买点"),
+    ])
+    assert [m["dt"] for m in out] == ["2025-01-02", "2025-01-04", "2025-01-05"]
+    assert [m["label"] for m in out] == ["二类买点", "二类卖点", "一类买点"]
+
+    # 空输入
+    assert czsc_service._dedupe_markers([]) == []
+
+
+def test_extract_signal_markers_applies_global_dedup():
+    """_extract_signal_markers = per-key 检测 + 全局去重: 同日异向丢弃。"""
+    from datetime import datetime
+
+    class FakeBar:
+        def __init__(self, dt, close):
+            self.dt = dt
+            self.close = close
+
+    bars = [FakeBar(datetime(2025, 5, 15), 10.5)]
+    sigs = [
+        {"dt": datetime(2025, 5, 15),
+         "日线_D1B_BUY1": "一买_7笔_任意_0",
+         "日线_D1B_SELL1": "一卖_7笔_任意_0"},
+    ]
+    # 同日又买又卖 → 异向冲突丢弃
+    assert czsc_service._extract_signal_markers(sigs, bars) == []
 
 
 def test_build_signals_config():
@@ -591,19 +647,22 @@ def test_build_signals_config():
 
 
 def test_default_signals_exists():
-    """DEFAULT_SIGNALS 包含核心信号。"""
+    """DEFAULT_SIGNALS 包含核心信号 (买卖点 + 背驰 + 笔状态)。"""
     assert "cxt_first_buy_V221126" in czsc_service.DEFAULT_SIGNALS
     assert "cxt_first_sell_V221126" in czsc_service.DEFAULT_SIGNALS
-    assert len(czsc_service.DEFAULT_SIGNALS) == 6
+    assert "cxt_double_zs_V230311" in czsc_service.DEFAULT_SIGNALS  # 中枢背驰
+    assert "cxt_three_bi_V230618" in czsc_service.DEFAULT_SIGNALS   # 三笔背驰
+    assert len(czsc_service.DEFAULT_SIGNALS) == 10
 
 
 def test_list_signals():
-    """list_signals 返回分组目录 (需 czsc 已装)。"""
+    """list_signals 返回分组目录 (需 czsc 已装), 仅白名单内信号。"""
     pytest.importorskip("czsc")
     result = czsc_service.list_signals()
     assert result["available"] is True
     assert isinstance(result["groups"], dict)
-    assert result["total"] > 40
+    # 白名单过滤: 总数受限于白名单, 且仍有一定数量
+    assert 20 <= result["total"] <= len(czsc_service.SIGNAL_WHITELIST)
     # 每组元素有必要字段
     for group_name, items in result["groups"].items():
         for item in items:
@@ -613,8 +672,12 @@ def test_list_signals():
             assert "param_template" in item
             assert "desc" in item
             assert "is_bs" in item
-    # 一买信号应标注为买卖点
     all_items = [it for items in result["groups"].values() for it in items]
+    # 白名单生效: 知名信号保留, 冷门信号过滤
+    all_names = {it["name"] for it in all_items}
+    assert "cxt_first_buy_V221126" in all_names
+    assert "bar_single_V230214" not in all_names  # 冷门 bar 信号被过滤
+    # 一买信号应标注为买卖点
     first_buy = next((it for it in all_items if it["name"] == "cxt_first_buy_V221126"), None)
     if first_buy:
         assert first_buy["is_bs"] is True

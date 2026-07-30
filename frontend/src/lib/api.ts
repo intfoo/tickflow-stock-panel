@@ -149,6 +149,7 @@ export interface CzscSignalEntry {
   param_template: string
   desc: string
   is_bs?: boolean
+  default_params?: Record<string, unknown>
 }
 export interface CzscSignalsCatalog {
   available: boolean
@@ -1867,11 +1868,12 @@ export const api = {
   },
 
   // ===== 缠论分析 (czsc) =====
-  czscAnalyze: (symbol: string, freq: CzscFreq = '日线', days?: number, signals?: string[]) =>
+  czscAnalyze: (symbol: string, freq: CzscFreq = '日线', days?: number, signals?: string[], signalParams?: Record<string, Record<string, unknown>>) =>
     request<CzscAnalyzeResponse>(
       `/api/czsc/analyze?symbol=${encodeURIComponent(symbol)}&freq=${freq}`
       + (days ? `&days=${days}` : '')
-      + (signals?.length ? `&signals=${encodeURIComponent(signals.join(','))}` : ''),
+      + (signals?.length ? `&signals=${encodeURIComponent(signals.join(','))}` : '')
+      + (signalParams && Object.keys(signalParams).length ? `&signal_params=${encodeURIComponent(JSON.stringify(signalParams))}` : ''),
     ),
   czscSignals: () =>
     request<CzscSignalsCatalog>('/api/czsc/signals'),

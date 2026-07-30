@@ -111,10 +111,6 @@ function CzscAnalysisBoard({ symbol, freq }: { symbol: string; freq: CzscFreq })
   })
 
   const defaultSignals = statusQuery.data?.default_signals ?? []
-  const allSignalNames = useMemo(() => {
-    const groups = signalsQuery.data?.groups ?? {}
-    return Object.values(groups).flat().map((s) => s.name)
-  }, [signalsQuery.data])
 
   // selectedSignals 初始化为 default_signals；symbol/freq 变化时保持
   const [selectedSignals, setSelectedSignals] = useState<string[]>([])
@@ -138,15 +134,8 @@ function CzscAnalysisBoard({ symbol, freq }: { symbol: string; freq: CzscFreq })
     staleTime: 60_000,
   })
 
-  // --- 信号勾选操作 ---
-  const toggleSignal = (name: string) => {
-    setSelectedSignals((prev) =>
-      prev.includes(name) ? prev.filter((s) => s !== name) : [...prev, name],
-    )
-  }
-  const selectAll = () => setSelectedSignals(allSignalNames)
-  const clearAll = () => setSelectedSignals([])
-  const restoreDefault = () => setSelectedSignals(defaultSignals)
+  // --- 信号勾选操作 (勾选暂存于 SignalPanel 内部 draft, 点"完成"才提交, 避免每次勾选触发重新分析) ---
+  const applySignals = (next: string[]) => setSelectedSignals(next)
 
   const isMinuteFreq = MINUTE_FREQS.includes(freq)
 
@@ -244,10 +233,7 @@ function CzscAnalysisBoard({ symbol, freq }: { symbol: string; freq: CzscFreq })
           signalsQuery={signalsQuery}
           statusQuery={statusQuery}
           selectedSignals={selectedSignals}
-          onToggle={toggleSignal}
-          onSelectAll={selectAll}
-          onClearAll={clearAll}
-          onRestoreDefault={restoreDefault}
+          onApply={applySignals}
         />
 
         {/* 结构摘要 */}
@@ -307,32 +293,38 @@ interface SignalPanelProps {
   signalsQuery: ReturnType<typeof useQuery>
   statusQuery: ReturnType<typeof useQuery>
   selectedSignals: string[]
-  onToggle: (name: string) => void
-  onSelectAll: () => void
-  onClearAll: () => void
-  onRestoreDefault: () => void
+  onApply: (next: string[]) => void
 }
 
 function SignalPanel({
   signalsQuery,
   statusQuery,
   selectedSignals,
-  onToggle,
-  onSelectAll,
-  onClearAll,
-  onRestoreDefault,
+  onApply,
 }: SignalPanelProps) {
   const catalog = signalsQuery.data
   const groups = catalog?.groups ?? {}
   const groupEntries = Object.entries(groups)
-  const selectedCount = selectedSignals.length
+  const allSignalNames = useMemo(
+    () => Object.values(groups).flat().map((s) => s.name),
+    [groups],
+  )
+  const defaultSignals = statusQuery.data?.default_signals ?? []
 
+  // draft: 勾选暂存, 点"完成"才提交; 打开下拉时同步为当前已生效选择
+  const [draftSignals, setDraftSignals] = useState<string[]>(selectedSignals)
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [groupFilter, setGroupFilter] = useState<string>('全部')
   const ref = useRef<HTMLDivElement>(null)
 
-  // 点击外部收起下拉
+  // 打开下拉瞬间同步 draft 为已生效选择 (仅在 open 翻转时同步, 不随 selectedSignals 变化)
+  useEffect(() => {
+    if (open) setDraftSignals(selectedSignals)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  // 点击外部收起下拉 (丢弃未提交的 draft)
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
@@ -341,6 +333,23 @@ function SignalPanel({
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
+
+  // draft 上的操作 (不触发请求; 点"完成"才提交)
+  const toggleSignal = (name: string) => {
+    setDraftSignals((prev) =>
+      prev.includes(name) ? prev.filter((s) => s !== name) : [...prev, name],
+    )
+  }
+  const selectAll = () => setDraftSignals(allSignalNames)
+  const clearAll = () => setDraftSignals([])
+  const restoreDefault = () => setDraftSignals(defaultSignals)
+  const handleApply = () => {
+    onApply(draftSignals)
+    setOpen(false)
+  }
+
+  // 已选计数: 展开时显示 draft (编辑中实时反馈), 收起时显示已生效
+  const displayCount = open ? draftSignals.length : selectedSignals.length
 
   const q = search.trim().toLowerCase()
   const filteredEntries = useMemo(() => {
@@ -369,7 +378,7 @@ function SignalPanel({
         <ListChecks className="h-3.5 w-3.5 text-sky-400 shrink-0" />
         <span className="text-xs font-medium text-foreground">信号选择</span>
         <span className="text-[10px] text-muted ml-auto tabular-nums">
-          已选 {selectedCount} / {catalog?.total ?? 0}
+          已选 {displayCount} / {catalog?.total ?? 0}
         </span>
         <ChevronDown className={`h-3.5 w-3.5 text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -403,9 +412,9 @@ function SignalPanel({
 
             {/* 操作按钮 */}
             <div className="flex items-center gap-1.5">
-              <button onClick={onSelectAll} className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors">全选</button>
-              <button onClick={onClearAll} className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors">清空</button>
-              <button onClick={onRestoreDefault} className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors">默认</button>
+              <button onClick={selectAll} className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors">全选</button>
+              <button onClick={clearAll} className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors">清空</button>
+              <button onClick={restoreDefault} className="flex-1 h-6 rounded text-[10px] bg-elevated/40 hover:bg-elevated/70 text-secondary transition-colors">默认</button>
             </div>
 
             {/* 说明: 只有买卖点信号会在K线显示标记 */}
@@ -417,11 +426,11 @@ function SignalPanel({
             </div>
 
             {/* 性能警告 */}
-            {selectedCount > 30 && (
+            {draftSignals.length > 30 && (
               <div className="flex items-start gap-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 px-2 py-1.5">
                 <AlertTriangle className="h-3 w-3 text-amber-400 shrink-0 mt-0.5" />
                 <span className="text-[10px] text-amber-300 leading-tight">
-                  已选 {selectedCount} 个信号，分钟级 × 大量信号可能数秒，请耐心等待。
+                  已选 {draftSignals.length} 个信号，分钟级 × 大量信号可能数秒，请耐心等待。
                 </span>
               </div>
             )}
@@ -444,7 +453,7 @@ function SignalPanel({
                       <span className="opacity-50 ml-1">({entries.length})</span>
                     </div>
                     {entries.map((sig) => {
-                      const checked = selectedSignals.includes(sig.name)
+                      const checked = draftSignals.includes(sig.name)
                       return (
                         <label
                           key={sig.name}
@@ -453,7 +462,7 @@ function SignalPanel({
                           <input
                             type="checkbox"
                             checked={checked}
-                            onChange={() => onToggle(sig.name)}
+                            onChange={() => toggleSignal(sig.name)}
                             className="mt-0.5 h-3 w-3 shrink-0 accent-sky-400 cursor-pointer"
                           />
                           <div className="min-w-0 flex-1">
@@ -467,6 +476,11 @@ function SignalPanel({
                             <div className="text-[9px] text-muted/60 truncate font-mono leading-tight">
                               {sig.name}
                             </div>
+                            {sig.default_params && Object.keys(sig.default_params).length > 0 && (
+                              <div className="text-[8px] text-muted/40 truncate font-mono leading-tight">
+                                {Object.entries(sig.default_params).map(([k, v]) => `${k}=${String(v)}`).join(' ')}
+                              </div>
+                            )}
                           </div>
                         </label>
                       )
@@ -480,9 +494,9 @@ function SignalPanel({
               <div className="text-[9px] text-muted/50 text-center">加载默认信号…</div>
             )}
 
-            {/* 完成 */}
+            {/* 完成: 提交 draft 并关闭 */}
             <button
-              onClick={() => setOpen(false)}
+              onClick={handleApply}
               className="w-full h-7 rounded text-[11px] bg-accent/15 hover:bg-accent/25 text-accent font-medium transition-colors"
             >
               完成
