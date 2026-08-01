@@ -13,6 +13,7 @@ import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
+import { boardTag as boardBadge } from '@/components/stock-table/primitives'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { cnSignal } from '@/lib/signals'
 import { SignalPicker } from '@/components/screener/SignalPicker'
@@ -235,6 +236,22 @@ const buildDefaultOverrides = (detail: StrategyDetail) => normalizeStrategyOverr
   trailing_take_profit_drawdown: detail.trailing_take_profit_drawdown,
   score_min: null,
   score_max: null,
+  max_hold_days: detail.max_hold_days,
+})
+
+const strategyBacktestConfigSignature = (detail: StrategyDetail) => JSON.stringify({
+  execution_backend: detail.execution_backend,
+  basic_filter: detail.basic_filter,
+  params: detail.params,
+  params_defaults: detail.params_defaults,
+  scoring: detail.scoring,
+  entry_signals: detail.entry_signals,
+  exit_signals: detail.exit_signals,
+  stop_loss: detail.stop_loss,
+  take_profit: detail.take_profit,
+  trailing_stop: detail.trailing_stop,
+  trailing_take_profit_activate: detail.trailing_take_profit_activate,
+  trailing_take_profit_drawdown: detail.trailing_take_profit_drawdown,
   max_hold_days: detail.max_hold_days,
 })
 
@@ -778,6 +795,12 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
                   >
                     <span className="w-[78px] shrink-0 font-mono">{r.symbol}</span>
                     <span className="min-w-0 flex-1 truncate text-secondary">{r.name}</span>
+                    {(() => {
+                      const b = boardBadge(r.symbol)
+                      return b && (
+                        <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] leading-none border ${b.color}`}>{b.label}</span>
+                      )
+                    })()}
                     <Plus className={`h-3.5 w-3.5 ${added ? 'opacity-30' : 'text-accent'}`} />
                   </button>
                 )
@@ -941,16 +964,24 @@ export function StrategyBacktest() {
 
   useEffect(() => {
     const detail = strategyDetail.data
-    if (!detail || loadedStrategyRef.current === detail.id) return
-    loadedStrategyRef.current = detail.id
-    if (saved?.selectedStrategy === detail.id && (saved.params || saved.overrides)) {
+    if (!detail) return
+    const configSignature = strategyBacktestConfigSignature(detail)
+    const configKey = `${assetType}:${detail.id}:${configSignature}`
+    if (loadedStrategyRef.current === configKey) return
+    loadedStrategyRef.current = configKey
+    if (
+      saved?.assetType === assetType
+      && saved.selectedStrategy === detail.id
+      && saved.strategyConfigSignature === configSignature
+      && (saved.params || saved.overrides)
+    ) {
       setStrategyParams(mergeStrategyParams(detail, saved.params))
       setOverrides(normalizeStrategyOverrides(detail, saved.overrides ?? buildDefaultOverrides(detail)))
       return
     }
     resetConfigFromDetail(detail)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategyDetail.data])
+  }, [assetType, strategyDetail.data])
 
   // 当全局回测任务完成时, 把结果写入组件 (切页回来也能恢复)
   useEffect(() => {
@@ -980,6 +1011,9 @@ export function StrategyBacktest() {
         minuteFill: highGranularity,
         params: strategyParams,
         overrides,
+        strategyConfigSignature: strategyDetail.data
+          ? strategyBacktestConfigSignature(strategyDetail.data)
+          : undefined,
         result: backtestTask.result,
       })
     }
