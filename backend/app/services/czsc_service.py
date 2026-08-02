@@ -82,13 +82,12 @@ _DAILY_CALENDAR_FACTOR: dict[str, int] = {
 # ---------------------------------------------------------------------------
 # 默认推荐信号 + namespace 中文映射
 # ---------------------------------------------------------------------------
+# 注意: 一/二/三类买卖点由 _detect_chanlun_bs 结构法自包含产生 (不依赖 czsc 信号,
+# 买卖对称且强制结构验证, 解决 czsc 一买过严0触发/二买不验证一买/三买依赖均线等问题)。
+# 此处默认信号只保留结构状态/背驰信号 (供 tooltip 展示结构信息, 不画买卖点 marker)。
 DEFAULT_SIGNALS: list[str] = [
     "cxt_bi_status_V230102",       # 笔表里关系 (笔状态核心)
     "cxt_bi_end_V230618",          # 笔结束辅助
-    "cxt_first_buy_V221126",       # 一买
-    "cxt_first_sell_V221126",      # 一卖
-    "cxt_second_bs_V230320",       # 二类买卖点
-    "cxt_third_bs_V230319",        # 三类买卖点 (增强版)
     "cxt_double_zs_V230311",       # 中枢背驰 (双中枢一类买卖点)
     "cxt_three_bi_V230618",        # 三笔背驰
     "cxt_five_bi_V230619",         # 五笔背驰
@@ -632,6 +631,11 @@ def _serialize(c, signals_result: list[dict], symbol: str, freq: str = "日线",
 
     # 买卖标记 (用原始 bars 建 dt→close 映射, 非 czsc 处理后的 bars_raw)
     signal_markers = _extract_signal_markers(signals_result, chart_bars, minute)
+    # 追加缠论买卖点 (结构法: 一买/一卖/二买/二卖, 独立于信号体系)
+    signal_markers = sorted(
+        signal_markers + _detect_chanlun_bs(c, chart_bars, minute),
+        key=lambda m: m["dt"],
+    )
 
     return {
         "available": True,
@@ -692,6 +696,8 @@ _BS_VALUE_PREFIX = {
     "一买": ("buy", "一类买点"), "一卖": ("sell", "一类卖点"),
     "二买": ("buy", "二类买点"), "二卖": ("sell", "二类卖点"),
     "三买": ("buy", "三类买点"), "三卖": ("sell", "三类卖点"),
+    # 类二买/类二卖: cxt_nine_bi_V230621 形态 value 以"类"开头, 需单独映射才画 marker
+    "类二买": ("buy", "二类买点"), "类二卖": ("sell", "二类卖点"),
 }
 
 # 买卖点优先级 (数值越小越高): 同日同向多 marker 取最高优先级 label
@@ -820,3 +826,158 @@ def _dedupe_markers(markers: list[dict]) -> list[dict]:
     if seg:
         result.append(min(seg, key=lambda x: _BS_PRIORITY.get(x["label"], 99)))
     return result
+
+
+# ---------------------------------------------------------------------------
+# 缠论买卖点检测 (结构法, 自包含): 一买/一卖/二买/二卖
+# ---------------------------------------------------------------------------
+# 设计依据 (缠中说禅):
+#   一买: 下跌趋势末端, 创阶段新低且动能衰竭(背驰) → 趋势底背驰点
+#   一卖: 上涨趋势末端, 创阶段新高且动能衰竭(背驰) → 趋势顶背驰点
+#   二买: 一买后第一次回调(向下笔)低点不破一买低点 (确定性高于一买)
+#   二卖: 一卖后第一次反弹(向上笔)高点不破一卖高点
+#
+# 与 czsc check_first_buy 的关键区别:
+#   czsc 要求"窗口首笔是全段最高/最低"(标准单边趋势), 震荡市一买几乎不触发
+#   (000001.SH 一类买点 0 次 / 一类卖点 6 次, 明显不对称失真);
+#   本实现改为"相对前一同向笔创新高/新低 + 背驰", 买卖对称且贴合实际市场。
+# ---------------------------------------------------------------------------
+
+def _fx_confirm_dt(fx, minute: bool) -> str:
+    """分型确认时间 = 构成分型的第3根K线 (new_bars[2]) 的 dt。
+
+    分型有滞后: 极值点 fx.dt 是中间K线, 分型在第3根K线才确认成立。
+    与 _serialize 分型 confirm_dt 同逻辑; new_bars 不可用时 fallback fx.dt。
+    """
+    try:
+        nb = fx.new_bars
+        if nb and len(nb) >= 3:
+            return _fmt_dt(nb[2].dt, minute)
+    except Exception:  # noqa: BLE001
+        pass
+    return _fmt_dt(fx.dt, minute)
+
+
+def _bc_fade(last, prev) -> bool:
+    """背驰判定: 末笔相对前一同向笔价格力度衰竭 (power_price 减小)。
+
+    缠论背驰以"价格动能衰竭"为准 (czsc 要求 量/长 至少一项同步, 会漏掉
+    阴跌背驰/放量V反等合理底, 如 000001.SH bi[16] 价缩放量); 量/长仅辅助, 不作门槛。
+    """
+    return last.power_price < prev.power_price
+
+
+def _is_first_buy(bis, j: int) -> bool:
+    """一买: 下跌趋势末端背驰点 (创新低 + 价格力度衰竭)。
+
+    缠论一买 = 趋势底背驰。笔级别判定 (与一卖对称):
+      1. 创新低显著: low 跌破前一同向下跌笔低点 (双底锚定容忍 1% 区间)
+      2. 价格背驰: power_price 相对前一同向笔衰竭
+    不要求"全图最低"(czsc check_first_buy 过严, 震荡市0触发)。
+    """
+    from czsc import Direction
+    if bis[j].direction != Direction.Down or j < 2:
+        return False
+    # 新低显著性: 跌破前一同向笔低点 (趋势延续) 或 双底锚定 (低点不破前低 +3% 区间)
+    if bis[j].low > bis[j - 2].low * 1.03:
+        return False
+    return _bc_fade(bis[j], bis[j - 2])
+
+
+def _is_first_sell(bis, j: int) -> bool:
+    """一卖: 上涨趋势末端背驰点 (创新高 + 价格力度衰竭)。与一买对称。"""
+    from czsc import Direction
+    if bis[j].direction != Direction.Up or j < 2:
+        return False
+    # 新高显著性: 突破前一同向笔高点 (趋势延续) 或 双顶锚定 (高点不破前高 -3% 区间)
+    if bis[j].high < bis[j - 2].high * 0.97:
+        return False
+    return _bc_fade(bis[j], bis[j - 2])
+
+
+def _find_zhongshu(bis) -> list[dict]:
+    """识别缠论中枢 (滑动窗口: 连续3笔重叠区间)。
+
+    中枢: 连续3笔的价格重叠区, ZG=min(3笔high)/ZD=max(3笔low) (ZG>ZD 才有效)。
+    滑动窗口识别所有候选中枢; 重叠中枢会对同一三买卖重复触发, 由调用方去重。
+    不处理中枢延伸 (延伸使边界模糊, 三买卖判定反而错位), 用固定3笔窗口边界清晰。
+
+    Returns:
+        [{a, b, zg, zd}] (b=a+2)
+    """
+    zs = []
+    for i in range(len(bis) - 2):
+        zg = min(bis[i].high, bis[i + 1].high, bis[i + 2].high)
+        zd = max(bis[i].low, bis[i + 1].low, bis[i + 2].low)
+        if zg > zd:
+            zs.append({"a": i, "b": i + 2, "zg": zg, "zd": zd})
+    return zs
+
+
+def _detect_chanlun_bs(c, chart_bars, minute: bool) -> list[dict]:
+    """缠论买卖点检测 (结构法, 自包含, 不依赖信号勾选): 一买/一卖/二买/二卖/三买/三卖。
+
+    Returns:
+        标记 [{dt, confirm_dt, kind, label, price}], label ∈ 一/二/三类买点|卖点。
+        confirm_dt = 锚定分型 fx_b 第3根K线确认时刻 (分型滞后2根K线), 与分型 confirm_dt 同逻辑。
+        回看批量判定, 历史与当前统一; 与 czsc 信号体系解耦。
+    """
+    from czsc import Direction
+    bis = c.bi_list
+    if len(bis) < 5:
+        return []
+    dt_close = {_fmt_dt(b.dt, minute): float(b.close) for b in chart_bars}
+    out = []
+    n = len(bis)
+
+    def mk(j: int, kind: str, label: str, price: float) -> dict:
+        fx_b = bis[j].fx_b
+        dt = _fmt_dt(fx_b.dt, minute)
+        # 确认时间: 该买卖点锚定的分型 fx_b 第3根K线确认时刻 (分型滞后2根K线)
+        return {"dt": dt, "confirm_dt": _fx_confirm_dt(fx_b, minute),
+                "kind": kind, "label": label,
+                "price": round(dt_close.get(dt, price), 4)}
+
+    for j in range(n):
+        if _is_first_buy(bis, j):
+            out.append(mk(j, "buy", "一类买点", bis[j].low))
+            # 二买: 一买后第一次回调(向下笔)低点不破一买低点
+            k = j + 2
+            if k < n and bis[k].direction == Direction.Down and bis[k].low >= bis[j].low:
+                out.append(mk(k, "buy", "二类买点", bis[k].low))
+        elif _is_first_sell(bis, j):
+            out.append(mk(j, "sell", "一类卖点", bis[j].high))
+            # 二卖: 一卖后第一次反弹(向上笔)高点不破一卖高点
+            k = j + 2
+            if k < n and bis[k].direction == Direction.Up and bis[k].high <= bis[j].high:
+                out.append(mk(k, "sell", "二类卖点", bis[k].high))
+
+    # 三买/三卖: 中枢突破后回抽不破 (缠中说禅: 离开段突破中枢, 回抽不入中枢)
+    for zs in _find_zhongshu(bis):
+        b, zg, zd = zs["b"], zs["zg"], zs["zd"]
+        # 离开段可以是中枢最后一笔(本身突破) 或 中枢后第一笔, 取第一个有效
+        for leave_idx in (b, b + 1):
+            if leave_idx >= n:
+                break
+            back_idx = leave_idx + 1
+            if back_idx >= n:
+                break
+            leave, back = bis[leave_idx], bis[back_idx]
+            # 三买: 向上突破 zg + 回抽(向下笔)低点不破 zg
+            if (leave.direction == Direction.Up and leave.high > zg
+                    and back.direction == Direction.Down and back.low >= zg):
+                out.append(mk(back_idx, "buy", "三类买点", back.low))
+                break
+            # 三卖: 向下突破 zd + 回抽(向上笔)高点不破 zd
+            if (leave.direction == Direction.Down and leave.low < zd
+                    and back.direction == Direction.Up and back.high <= zd):
+                out.append(mk(back_idx, "sell", "三类卖点", back.high))
+                break
+
+    # 去重: 同 dt 同 kind 取优先级最高 (一类>二类>三类), 按 dt 排序
+    best: dict = {}
+    for m in out:
+        key = (m["dt"], m["kind"])
+        if key not in best or _BS_PRIORITY.get(m["label"], 99) < _BS_PRIORITY.get(best[key]["label"], 99):
+            best[key] = m
+    return sorted(best.values(), key=lambda m: m["dt"])

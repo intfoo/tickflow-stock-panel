@@ -647,12 +647,19 @@ def test_build_signals_config():
 
 
 def test_default_signals_exists():
-    """DEFAULT_SIGNALS 包含核心信号 (买卖点 + 背驰 + 笔状态)。"""
-    assert "cxt_first_buy_V221126" in czsc_service.DEFAULT_SIGNALS
-    assert "cxt_first_sell_V221126" in czsc_service.DEFAULT_SIGNALS
+    """DEFAULT_SIGNALS 只含结构/背驰信号 (供 tooltip 展示, 不画买卖点 marker)。
+
+    一/二/三类买卖点改由 _detect_chanlun_bs 结构法自包含产生 (不依赖 czsc 信号,
+    买卖对称且强制结构验证), 故 first_buy/first_sell/third_bs 已移出默认信号。
+    """
+    assert "cxt_bi_status_V230102" in czsc_service.DEFAULT_SIGNALS  # 笔状态
     assert "cxt_double_zs_V230311" in czsc_service.DEFAULT_SIGNALS  # 中枢背驰
     assert "cxt_three_bi_V230618" in czsc_service.DEFAULT_SIGNALS   # 三笔背驰
-    assert len(czsc_service.DEFAULT_SIGNALS) == 10
+    # 买卖点信号已移出默认 (改由结构法 _detect_chanlun_bs 产生)
+    assert "cxt_first_buy_V221126" not in czsc_service.DEFAULT_SIGNALS
+    assert "cxt_first_sell_V221126" not in czsc_service.DEFAULT_SIGNALS
+    assert "cxt_third_bs_V230319" not in czsc_service.DEFAULT_SIGNALS
+    assert len(czsc_service.DEFAULT_SIGNALS) == 6
 
 
 def test_list_signals():

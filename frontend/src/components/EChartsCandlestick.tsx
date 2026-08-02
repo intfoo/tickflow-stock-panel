@@ -96,14 +96,14 @@ function volMaN(data: OHLC[], n: number): (number | null)[] {
   return result
 }
 
-function fmtVol(v: number | null | undefined): string {
+export function fmtVol(v: number | null | undefined): string {
   if (v == null) return '—'
   if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
   if (v >= 1e4) return (v / 1e4).toFixed(0) + '万'
   return v.toFixed(0)
 }
 
-function volumeRatioAt(data: OHLC[], index: number, days: number): number | null {
+export function volumeRatioAt(data: OHLC[], index: number, days: number): number | null {
   const window = Math.max(1, Math.min(20, Math.round(days)))
   if (index < window) return null
   let sum = 0
@@ -118,7 +118,7 @@ function volumeRatioAt(data: OHLC[], index: number, days: number): number | null
   return current / average
 }
 
-function fmtVolumeRatio(value: number | null, digits = 2): string {
+export function fmtVolumeRatio(value: number | null, digits = 2): string {
   return value == null ? '—' : `${value.toFixed(digits)}x`
 }
 
@@ -360,9 +360,9 @@ const CT = () => chartTheme(getTheme())
 const COMPACT_THRESHOLD = 60
 
 /** 子图上方信息栏高度 (px) */
-const INFO_BAR_H = 16
+export const INFO_BAR_H = 16
 /** 子图之间的间距 (px) */
-const SUB_GAP_PX = 4
+export const SUB_GAP_PX = 4
 
 function buildSubInfoGraphics(
   data: OHLC[],

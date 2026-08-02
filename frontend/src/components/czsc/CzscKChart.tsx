@@ -3,12 +3,26 @@ import { chartTheme, getTheme, useTheme } from '@/lib/theme'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import { Maximize2, Minimize2 } from 'lucide-react'
+import { storage } from '@/lib/storage'
+import {
+  SUB_CHARTS,
+  fmtVol,
+  volumeRatioAt,
+  fmtVolumeRatio,
+  INFO_BAR_H,
+  SUB_GAP_PX,
+  type OHLC,
+  type VolumeCompareConfig,
+} from '@/components/EChartsCandlestick'
 
 /**
  * 缠论分析专用 K 线图表。
  *
  * 复刻 AnalysisKChart 的 ECharts 构建模式（candlestick + volume bar + dataZoom），
  * 叠加缠论结构：分型(markPoint) / 笔(line) / 中枢(markArea) / 买卖点(markPoint)。
+ *
+ * 同时复用 EChartsCandlestick 的副图机制（SUB_CHARTS），支持均线 MA5/10/20/60、
+ * MACD / RSI / KDJ 副图、量比（成交量柱顶标签 + tooltip 数值）。
  *
  * 独立组件，不 import AnalysisKChart，避免耦合。
  */
@@ -22,6 +36,10 @@ const THEME = {
   volDown: 'rgba(18,183,106,0.5)',
   zs: 'rgba(59,130,246,0.12)',
   zsBorder: 'rgba(59,130,246,0.35)',
+  ma5: '#A1A1AA',
+  ma10: '#3B82F6',
+  ma20: '#F97316',
+  ma60: '#8B5CF6',
 }
 
 /** 当前主题的图表调色板 */
@@ -45,12 +63,89 @@ interface CzscChartProps {
   fxList: { dt: string; confirm_dt?: string; price: number; mark: 'top' | 'bottom'; power?: string }[]
   biList: { a_dt: string; a_price: number; b_dt: string; b_price: number; direction: 'up' | 'down' }[]
   zsList: { sdt: string; edt: string; zd: number; zg: number }[]
-  signalMarkers: { dt: string; kind: 'buy' | 'sell'; label: string; price: number }[]
+  signalMarkers: { dt: string; confirm_dt?: string; kind: 'buy' | 'sell'; label: string; price: number }[]
   signals?: Record<string, string>[]
   height?: number
 }
 
-const VOL_PANE_H = 90
+const DEFAULT_VOLUME_COMPARE: VolumeCompareConfig = { enabled: true, days: 1 }
+
+// 缠论页副图白名单: 仅渲染有数据支撑的副图 (vol 来自 bars.volume, macd 前端计算)。
+// RSI/KDJ/BOLL 后端未提供, 不渲染按钮避免空副图。
+const CZSC_SUB_KEYS = ['vol', 'macd'] as const
+
+function normalizeVolumeCompare(config: VolumeCompareConfig): VolumeCompareConfig {
+  return {
+    enabled: config.enabled !== false,
+    days: Math.max(1, Math.min(20, Math.round(Number(config.days) || 1))),
+  }
+}
+
+// ===== 指标计算 (前端, 因后端 czscAnalyze bars 仅 OHLCV) =====
+function calcMA(values: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = []
+  for (let i = 0; i < values.length; i++) {
+    if (i < period - 1) { out.push(null); continue }
+    let sum = 0
+    for (let j = i - period + 1; j <= i; j++) sum += values[j]
+    out.push(sum / period)
+  }
+  return out
+}
+
+function calcEMA(values: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = []
+  const k = 2 / (period + 1)
+  let prev: number | null = null
+  for (const v of values) {
+    if (prev == null) { prev = v; out.push(v) }
+    else { prev = v * k + prev * (1 - k); out.push(prev) }
+  }
+  return out
+}
+
+function calcMACD(closes: number[]): {
+  dif: (number | null)[]
+  dea: (number | null)[]
+  hist: (number | null)[]
+} {
+  const ema12 = calcEMA(closes, 12)
+  const ema26 = calcEMA(closes, 26)
+  const dif = closes.map((_, i) =>
+    ema12[i] != null && ema26[i] != null ? ema12[i]! - ema26[i]! : null,
+  )
+  const deaRaw = calcEMA(dif.map(d => d ?? 0), 9)
+  const dea = dif.map((d, i) => (d != null ? deaRaw[i] : null))
+  const hist = closes.map((_, i) =>
+    dif[i] != null && dea[i] != null ? 2 * (dif[i]! - dea[i]!) : null,
+  )
+  return { dif, dea, hist }
+}
+
+/** bars → OHLC[]，填入前端计算的 MA/MACD（供 SUB_CHARTS buildSeries 消费） */
+function barsToOHLC(bars: CzscChartProps['bars']): OHLC[] {
+  const closes = bars.map(b => b.close)
+  const ma5 = calcMA(closes, 5)
+  const ma10 = calcMA(closes, 10)
+  const ma20 = calcMA(closes, 20)
+  const ma60 = calcMA(closes, 60)
+  const { dif, dea, hist } = calcMACD(closes)
+  return bars.map((b, i) => ({
+    date: typeof b.date === 'string' ? b.date : String(b.date),
+    open: b.open,
+    high: b.high,
+    low: b.low,
+    close: b.close,
+    volume: b.volume ?? 0,
+    ma5: ma5[i],
+    ma10: ma10[i],
+    ma20: ma20[i],
+    ma60: ma60[i],
+    macd_dif: dif[i],
+    macd_dea: dea[i],
+    macd_hist: hist[i],
+  }))
+}
 
 export function CzscKChart({
   bars,
@@ -67,6 +162,10 @@ export function CzscKChart({
   const theme = useTheme()
   const [activeToggles, setActiveToggles] = useState<Set<string>>(new Set(['fx', 'bi', 'zs', 'signal']))
   const [isFs, setIsFs] = useState(false)
+  const [activeIndicators, setActiveIndicators] = useState<string[]>(['vol'])
+  const [volumeCompare, setVolumeCompare] = useState<VolumeCompareConfig>(() =>
+    normalizeVolumeCompare(storage.stockVolumeCompare.get(DEFAULT_VOLUME_COMPARE)),
+  )
 
   // 全屏状态跟踪 (浏览器 Fullscreen API)
   useEffect(() => {
@@ -80,19 +179,24 @@ export function CzscKChart({
     else document.exitFullscreen?.().catch(() => {})
   }
 
-  // 全屏时图表高度撑满视口 (留 80px 给开关行 + padding)
-  const effectiveHeight = isFs ? Math.max(window.innerHeight - 80, 300) : height
+  const activeSubDefs = activeIndicators
+    .map(key => SUB_CHARTS.find(s => s.key === key))
+    .filter((d): d is typeof SUB_CHARTS[number] => !!d)
+  // 副图额外高度 (信息栏 + 子图高 + 间距)
+  const subExtraH = activeSubDefs.reduce(
+    (sum, def) => sum + INFO_BAR_H + def.height + SUB_GAP_PX,
+    0,
+  )
+
+  // 全屏时图表高度撑满视口 (留 80px 给开关行 + padding)；副图额外加高
+  const effectiveHeight = (isFs ? Math.max(window.innerHeight - 80, 300) : height) + subExtraH
 
   // 数据预处理
   // date 用完整字符串：日线族 "YYYY-MM-DD"，分钟族 "YYYY-MM-DD HH:MM"（含空格）。
   // 不再 slice(0,10)，否则分钟族 dt 无法匹配 dateIndex。
-  const { dates, candle, vols, dateIndex, zoomStart, fxByDate, markerByDate, signalsByDate } = useMemo(() => {
+  const { dates, candle, dateIndex, zoomStart, fxByDate, markerByDate, signalsByDate, ohlcData } = useMemo(() => {
     const dates = bars.map(r => (typeof r.date === 'string' ? r.date : String(r.date)))
     const candle = bars.map(r => [r.open, r.close, r.low, r.high])
-    const vols = bars.map(r => ({
-      value: r.volume ?? 0,
-      itemStyle: { color: r.close >= r.open ? THEME.volUp : THEME.volDown },
-    }))
     const dateIndex = new Map(dates.map((d, i) => [d, i]))
     const showBars = 120
     const zoomStart = dates.length > showBars ? Math.round((1 - showBars / dates.length) * 100) : 0
@@ -101,20 +205,24 @@ export function CzscKChart({
     const markerByDate = new Map(signalMarkers.map(m => [m.dt, m]))
     // date → 信号值 dict (供 tooltip 展示结构状态信号, 如笔表里关系/分型强弱)
     const signalsByDate = new Map((signals ?? []).map(s => [String(s.dt ?? ''), s] as [string, Record<string, string>]))
-    return { dates, candle, vols, dateIndex, zoomStart, fxByDate, markerByDate, signalsByDate }
+    const ohlcData = barsToOHLC(bars)
+    return { dates, candle, dateIndex, zoomStart, fxByDate, markerByDate, signalsByDate, ohlcData }
   }, [bars, fxList, signalMarkers, signals])
 
   const buildOption = (): EChartsOption => {
-    // 布局: 主图 / 成交量 / 缩放条
+    // 布局: 主图 / [动态副图] / 缩放条
     const SLIDER_H = 22
     const PAD_TOP = 16
-    const GAP_MAIN_VOL = 8
-    const GAP_VOL_SLIDER = 12
+    const GAP_MAIN_SUB = 8
+    const GAP_SUB_SLIDER = 12
     const PAD_BOTTOM = 8
-    const volH = VOL_PANE_H
-    const mainH = effectiveHeight - PAD_TOP - GAP_MAIN_VOL - volH - GAP_VOL_SLIDER - SLIDER_H - PAD_BOTTOM
-    const volTop = PAD_TOP + mainH + GAP_MAIN_VOL
-    const sliderBottom = PAD_BOTTOM
+    const LEFT = 56
+    const RIGHT = 24
+
+    const subZoneH = activeSubDefs.length > 0
+      ? GAP_MAIN_SUB + subExtraH
+      : 0
+    const mainH = effectiveHeight - PAD_TOP - subZoneH - GAP_SUB_SLIDER - SLIDER_H - PAD_BOTTOM
 
     // 价格区间缓冲 (供分型/买卖点标注的纵向偏移基准)
     let pricePad = 0
@@ -245,15 +353,23 @@ export function CzscKChart({
           ? { silent: true, data: zsMarkAreas }
           : undefined,
       },
-      {
-        name: '成交量',
-        type: 'bar',
-        xAxisIndex: 1,
-        yAxisIndex: 1,
-        data: vols,
-        animation: false,
-      },
     ]
+
+    // ===== 均线 MA5/10/20/60 (主图叠加) =====
+    const hasMA = ohlcData.some(d => d.ma5 != null || d.ma10 != null || d.ma20 != null || d.ma60 != null)
+    if (hasMA) {
+      const maLine = (key: keyof OHLC, color: string, name: string) => ({
+        name, type: 'line',
+        data: ohlcData.map(d => (d[key] != null ? Number(d[key]) : '-')),
+        smooth: true, symbol: 'none', animation: false,
+        silent: true,
+        lineStyle: { width: 1, color }, itemStyle: { color },
+      })
+      series.push(maLine('ma5', THEME.ma5, 'MA5'))
+      series.push(maLine('ma10', THEME.ma10, 'MA10'))
+      series.push(maLine('ma20', THEME.ma20, 'MA20'))
+      series.push(maLine('ma60', THEME.ma60, 'MA60'))
+    }
 
     // ===== 笔 line series =====
     // 把 bi 端点展平为 [date, price] 数组，画成一条折线
@@ -289,69 +405,92 @@ export function CzscKChart({
       }
     }
 
+    // ===== 动态副图 (复用 EChartsCandlestick SUB_CHARTS) =====
+    const grids: any[] = [
+      { left: LEFT, right: RIGHT, top: PAD_TOP, height: mainH },
+    ]
+    const xAxes: any[] = [
+      {
+        type: 'category',
+        data: dates,
+        boundaryGap: true,
+        axisLine: { lineStyle: { color: CT().grid } },
+        axisLabel: {
+          color: CT().text,
+          fontSize: 10,
+          // 分钟族 "YYYY-MM-DD HH:MM" → "MM-DD HH:MM"；日线族 "YYYY-MM-DD" → "MM-DD"
+          formatter: (val: string) => val ? val.slice(5) : '',
+        },
+        splitLine: { show: false },
+        axisPointer: { show: true, label: { show: false } },
+      },
+    ]
+    const yAxes: any[] = [
+      {
+        scale: true,
+        // 预留上下边距: 分型/买卖点标注位于数据极值外侧, 不扩大轴范围会被裁剪看不到。
+        // 默认 6%, 买卖点偏移较大时按其实际需求 (topExtra/bottomExtra) 自适应加宽
+        min: (v: { min: number; max: number }) => v.min - Math.max((v.max - v.min) * 0.06, bottomExtra),
+        max: (v: { min: number; max: number }) => v.max + Math.max((v.max - v.min) * 0.06, topExtra),
+        splitLine: { lineStyle: { color: CT().grid } },
+        axisLabel: { color: CT().text, fontSize: 10, fontFamily: 'JetBrains Mono, monospace' },
+      },
+    ]
+    const xAxisIndices = [0]
+
+    let curTop = PAD_TOP + mainH + GAP_MAIN_SUB
+    activeSubDefs.forEach((def, i) => {
+      const gridIdx = i + 1
+      const xAxisIdx = i + 1
+      const yAxisIdx = i + 1
+      const chartTop = curTop + INFO_BAR_H
+
+      grids.push({
+        left: LEFT, right: RIGHT,
+        top: chartTop, height: def.height,
+        show: true, borderColor: CT().grid, borderWidth: 1,
+      })
+      xAxes.push({
+        type: 'category', gridIndex: gridIdx, data: dates, boundaryGap: true,
+        axisLine: { show: false }, axisLabel: { show: false },
+        axisTick: { show: false }, splitLine: { show: false },
+        axisPointer: { label: { show: false } },
+      })
+      const isFixedRange = !!def.yAxisConfig
+      yAxes.push({
+        scale: !isFixedRange,
+        ...(isFixedRange ? def.yAxisConfig : {}),
+        gridIndex: gridIdx,
+        splitNumber: 2,
+        axisLine: { show: false }, axisTick: { show: false },
+        splitLine: { lineStyle: { color: CT().grid } },
+        axisLabel: {
+          show: true, color: CT().text, fontSize: 9,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
+      })
+      xAxisIndices.push(xAxisIdx)
+
+      const subSeries = def.buildSeries(ohlcData, { compact: false, volumeCompare })
+      subSeries.forEach((s: any) => {
+        series.push({ ...s, xAxisIndex: xAxisIdx, yAxisIndex: yAxisIdx })
+      })
+
+      curTop += INFO_BAR_H + def.height + SUB_GAP_PX
+    })
+
     return {
       animation: false,
       backgroundColor: 'transparent',
-      grid: [
-        { left: 56, right: 24, top: 16, height: mainH },
-        { left: 56, right: 24, top: volTop, height: volH },
-      ],
-      // axisLabel 格式化：分钟族显示 "MM-DD HH:MM"，日线族显示 "MM-DD"
-      // （ECharts category 轴的 axisLabel formatter 接收原始 category 值）
-      xAxis: [
-        {
-          type: 'category',
-          data: dates,
-          boundaryGap: true,
-          axisLine: { lineStyle: { color: CT().grid } },
-          axisLabel: {
-            color: CT().text,
-            fontSize: 10,
-            // 分钟族 "YYYY-MM-DD HH:MM" → "MM-DD HH:MM"；日线族 "YYYY-MM-DD" → "MM-DD"
-            formatter: (val: string) => val ? val.slice(5) : '',
-          },
-          splitLine: { show: false },
-          axisPointer: { show: true, label: { show: false } },
-        },
-        {
-          type: 'category',
-          gridIndex: 1,
-          data: dates,
-          boundaryGap: true,
-          axisLabel: { show: false },
-          axisLine: { show: false },
-          axisTick: { show: false },
-        },
-      ],
-      yAxis: [
-        {
-          scale: true,
-          // 预留上下边距: 分型/买卖点标注位于数据极值外侧, 不扩大轴范围会被裁剪看不到。
-          // 默认 6%, 买卖点偏移较大时按其实际需求 (topExtra/bottomExtra) 自适应加宽
-          min: (v: { min: number; max: number }) => v.min - Math.max((v.max - v.min) * 0.06, bottomExtra),
-          max: (v: { min: number; max: number }) => v.max + Math.max((v.max - v.min) * 0.06, topExtra),
-          splitLine: { lineStyle: { color: CT().grid } },
-          axisLabel: { color: CT().text, fontSize: 10, fontFamily: 'JetBrains Mono, monospace' },
-        },
-        {
-          scale: true,
-          gridIndex: 1,
-          splitNumber: 2,
-          splitLine: { show: false },
-          axisLabel: {
-            color: CT().text,
-            fontSize: 10,
-            fontFamily: 'JetBrains Mono, monospace',
-            formatter: (v: number) => fmtVol(v),
-          },
-        },
-      ],
+      grid: grids,
+      xAxis: xAxes,
+      yAxis: yAxes,
       dataZoom: [
-        { type: 'inside', xAxisIndex: [0, 1], start: zoomStart, end: 100 },
+        { type: 'inside', xAxisIndex: xAxisIndices, start: zoomStart, end: 100 },
         {
           type: 'slider',
-          xAxisIndex: [0, 1],
-          bottom: sliderBottom,
+          xAxisIndex: xAxisIndices,
+          bottom: PAD_BOTTOM,
           height: SLIDER_H,
           start: zoomStart,
           end: 100,
@@ -387,6 +526,7 @@ export function CzscKChart({
           const idx = dateIndex.get(date)
           if (idx == null) return `<div style="font-weight:600">${date}</div>`
           const bar = bars[idx]
+          const ohlc = ohlcData[idx]
           const up = bar.close >= bar.open
           let html = `<div style="font-weight:600;margin-bottom:2px">${date}</div>`
           html += `<div style="display:flex;gap:8px">`
@@ -395,6 +535,32 @@ export function CzscKChart({
           html += `<span>低 ${bar.low.toFixed(2)}</span>`
           html += `<span>高 ${bar.high.toFixed(2)}</span>`
           html += `</div>`
+          // 均线 MA5/10/20/60
+          if (ohlc) {
+            const maSpan = (label: string, v: number | null | undefined, color: string) =>
+              v != null ? `<span style="color:${color}">${label} ${v.toFixed(2)}</span>` : ''
+            const maHtml = [
+              maSpan('MA5', ohlc.ma5, THEME.ma5),
+              maSpan('MA10', ohlc.ma10, THEME.ma10),
+              maSpan('MA20', ohlc.ma20, THEME.ma20),
+              maSpan('MA60', ohlc.ma60, THEME.ma60),
+            ].filter(Boolean).join(' ')
+            if (maHtml) html += `<div style="margin-top:2px;display:flex;gap:8px">${maHtml}</div>`
+          }
+          // 成交量 + 量比
+          const ratio = volumeRatioAt(ohlcData, idx, volumeCompare.days)
+          html += `<div style="margin-top:2px;display:flex;gap:8px">`
+          html += `<span>量 ${fmtVol(bar.volume)}</span>`
+          html += `<span style="color:${ratio != null && ratio >= 1 ? THEME.bull : THEME.bear}">量比 ${fmtVolumeRatio(ratio)}</span>`
+          html += `</div>`
+          // MACD (激活时显示)
+          if (activeIndicators.includes('macd') && ohlc) {
+            html += `<div style="margin-top:2px;display:flex;gap:8px">`
+            html += `<span style="color:#FACC15">DIF ${ohlc.macd_dif != null ? ohlc.macd_dif.toFixed(3) : '—'}</span>`
+            html += `<span style="color:#8B5CF6">DEA ${ohlc.macd_dea != null ? ohlc.macd_dea.toFixed(3) : '—'}</span>`
+            html += `<span style="color:${ohlc.macd_hist != null && ohlc.macd_hist >= 0 ? THEME.bull : THEME.bear}">MACD ${ohlc.macd_hist != null ? ohlc.macd_hist.toFixed(3) : '—'}</span>`
+            html += `</div>`
+          }
           // 当天有分型 → 追加显示 (含分型确认时间, 分型有滞后: 极值点+2根K线才确认)
           const fx = fxByDate.get(date)
           if (fx) {
@@ -404,11 +570,13 @@ export function CzscKChart({
             const power = fx.power ? `(${fx.power})` : ''
             html += `<div style="margin-top:2px;color:${color}">▲ ${label}${power} ${fx.price.toFixed(2)} <span style="opacity:0.65">${confirm}</span></div>`
           }
-          // 当天有买卖点 → 追加显示
+          // 当天有买卖点 → 追加显示 (含确认时间, 买卖点锚定的分型滞后2根K线确认)
           const marker = markerByDate.get(date)
           if (marker) {
             const color = marker.kind === 'buy' ? THEME.bull : THEME.bear
-            html += `<div style="margin-top:2px;color:${color}">● ${marker.label} ${(marker.price ?? 0).toFixed(2)}</div>`
+            const confirm = marker.confirm_dt && marker.confirm_dt !== marker.dt
+              ? `<span style="opacity:0.65"> 确认 ${marker.confirm_dt}</span>` : ''
+            html += `<div style="margin-top:2px;color:${color}">● ${marker.label} ${(marker.price ?? 0).toFixed(2)}${confirm}</div>`
           }
           // 当天信号值 (结构状态信号, 如笔表里关系/分型强弱; 跳过未触发的买卖点"其他")
           const sigs = signalsByDate.get(date)
@@ -452,7 +620,7 @@ export function CzscKChart({
     chartInstRef.current.resize()
     chartInstRef.current.setOption(buildOption(), true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bars, fxList, biList, zsList, signalMarkers, signals, effectiveHeight, theme, activeToggles])
+  }, [bars, fxList, biList, zsList, signalMarkers, signals, effectiveHeight, theme, activeToggles, activeIndicators, volumeCompare])
 
   // resize: 窗口尺寸 + 容器尺寸 (侧栏收起/展开改变容器宽度时重绘图表)
   useEffect(() => {
@@ -476,6 +644,18 @@ export function CzscKChart({
       const next = new Set(prev)
       if (next.has(t)) next.delete(t)
       else next.add(t)
+      return next
+    })
+  }
+
+  const toggleIndicator = (key: string) => {
+    setActiveIndicators(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
+  }
+
+  const updateVolumeCompare = (patch: Partial<VolumeCompareConfig>) => {
+    setVolumeCompare(prev => {
+      const next = normalizeVolumeCompare({ ...prev, ...patch })
+      storage.stockVolumeCompare.set(next)
       return next
     })
   }
@@ -508,6 +688,61 @@ export function CzscKChart({
             </button>
           )
         })}
+
+        {/* 副图切换 */}
+        <span className="text-[10px] text-muted ml-2 mr-1">副图</span>
+        {CZSC_SUB_KEYS.map(key => {
+          const ind = SUB_CHARTS.find(s => s.key === key)
+          if (!ind) return null
+          const active = activeIndicators.includes(ind.key)
+          return (
+            <button
+              key={ind.key}
+              onClick={() => toggleIndicator(ind.key)}
+              className={`px-2 h-6 rounded-md text-[10px] font-mono cursor-pointer transition-colors border ${
+                active
+                  ? 'text-accent border-accent/40 bg-accent/10'
+                  : 'text-muted bg-base/40 border-border/30 hover:border-border/60'
+              }`}
+            >
+              {ind.label}
+            </button>
+          )
+        })}
+
+        {/* 量比控件 (成交量激活时) */}
+        {activeIndicators.includes('vol') && (
+          <div className="ml-0.5 flex h-6 items-center gap-1.5 border-l border-border/70 pl-2">
+            <span className="text-[10px] text-muted">量比</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={volumeCompare.enabled}
+              aria-label="开启量能对比"
+              title={volumeCompare.enabled ? '关闭量能对比' : '开启量能对比'}
+              onClick={() => updateVolumeCompare({ enabled: !volumeCompare.enabled })}
+              className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
+                volumeCompare.enabled ? 'bg-accent' : 'bg-elevated'
+              }`}
+            >
+              <span className={`absolute left-0 top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform ${
+                volumeCompare.enabled ? 'translate-x-3' : 'translate-x-0.5'
+              }`} />
+            </button>
+            <select
+              aria-label="量能对比周期"
+              value={volumeCompare.days}
+              disabled={!volumeCompare.enabled}
+              onChange={event => updateVolumeCompare({ days: Number(event.target.value) })}
+              className="h-5 rounded border border-border bg-base px-1 text-[10px] text-secondary outline-none disabled:opacity-40"
+            >
+              {Array.from({ length: 20 }, (_, index) => index + 1).map(days => (
+                <option key={days} value={days}>前{days}日均量</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* 全屏切换 */}
         <button
           onClick={toggleFullscreen}
@@ -520,13 +755,6 @@ export function CzscKChart({
       <div ref={chartRef} style={{ width: '100%', height: effectiveHeight }} />
     </div>
   )
-}
-
-function fmtVol(v: number): string {
-  if (!v) return '0'
-  if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
-  if (v >= 1e4) return (v / 1e4).toFixed(0) + '万'
-  return v.toFixed(0)
 }
 
 /** 买卖点标签简写: "一类买点" → "1B", "二类卖点" → "2S", "三类买点" → "3B" */
