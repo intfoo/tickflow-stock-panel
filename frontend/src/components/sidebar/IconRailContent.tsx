@@ -1,3 +1,4 @@
+import { useState, useCallback } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -32,6 +33,14 @@ interface IconRailContentProps {
 }
 
 export function IconRailContent({ toggleButton }: IconRailContentProps) {
+  // ===== Fixed 定位 tooltip（绕开 aside overflow-hidden 限制）=====
+  const [tooltip, setTooltip] = useState<{ text: React.ReactNode; x: number; y: number } | null>(null)
+  const showTooltip = useCallback((text: React.ReactNode, e: React.MouseEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setTooltip({ text, x: rect.right + 6, y: rect.top + rect.height / 2 })
+  }, [])
+  const hideTooltip = useCallback(() => setTooltip(null), [])
+
   // ===== 按需 query（图标条态精简，只取需要的）=====
   const { data: caps } = useCapabilities()
   const { data: prefs } = usePreferences()
@@ -112,13 +121,14 @@ export function IconRailContent({ toggleButton }: IconRailContentProps) {
       {toggleButton && <div className="shrink-0">{toggleButton}</div>}
 
       {/* Nav 仅 icon */}
-      <nav className="flex-1 min-h-0 overflow-y-auto w-full px-1 py-2 space-y-1">
+      <nav className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden w-full px-1 py-2 space-y-1">
         {visibleNavItems.map(({ to, label, icon: Icon, badge }) => (
           <NavLink
             key={to}
             to={to}
+            onMouseEnter={(e) => showTooltip(<>{label}{badge && <span className="ml-1 text-amber-400">[{badge}]</span>}</>, e)}
+            onMouseLeave={hideTooltip}
             className="group relative flex items-center justify-center h-9 rounded-btn transition-colors duration-150 ease-smooth text-foreground/80 hover:bg-elevated hover:text-foreground"
-            title={undefined} // 用自定义 tooltip 替代原生 title
           >
             {({ isActive }) => (
               <>
@@ -138,11 +148,6 @@ export function IconRailContent({ toggleButton }: IconRailContentProps) {
                 {badge && (
                   <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-amber-400" />
                 )}
-                {/* CSS tooltip */}
-                <span className="pointer-events-none absolute left-full ml-2 whitespace-nowrap rounded bg-elevated px-2 py-1 text-xs text-foreground opacity-0 shadow-lg group-hover:opacity-100 transition-opacity z-50">
-                  {label}
-                  {badge && <span className="ml-1 text-amber-400">[{badge}]</span>}
-                </span>
               </>
             )}
           </NavLink>
@@ -154,8 +159,9 @@ export function IconRailContent({ toggleButton }: IconRailContentProps) {
         <button
           onClick={() => handleToggle(!realtimeEnabled)}
           disabled={toggleQuote.isPending || isPaused}
+          onMouseEnter={(e) => showTooltip(`实时行情 · ${realtimeModeLabel} · ${realtimeStatusText}`, e)}
+          onMouseLeave={hideTooltip}
           className="group relative mb-1 flex h-9 w-9 items-center justify-center rounded-btn transition-colors duration-150 ease-smooth hover:bg-elevated disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
-          title={undefined}
         >
           <RadioTower
             className={cn(
@@ -167,9 +173,6 @@ export function IconRailContent({ toggleButton }: IconRailContentProps) {
                   : 'text-muted',
             )}
           />
-          <span className="pointer-events-none absolute left-full ml-2 whitespace-nowrap rounded bg-elevated px-2 py-1 text-xs text-foreground opacity-0 shadow-lg group-hover:opacity-100 transition-opacity z-50">
-            实时行情 · {realtimeModeLabel} · {realtimeStatusText}
-          </span>
         </button>
       ) : null}
 
@@ -183,6 +186,8 @@ export function IconRailContent({ toggleButton }: IconRailContentProps) {
         <ThemeToggle />
         <NavLink
           to="/settings"
+          onMouseEnter={(e) => showTooltip('设置', e)}
+          onMouseLeave={hideTooltip}
           className={({ isActive }) =>
             cn(
               'group relative flex h-9 w-9 items-center justify-center rounded-btn transition-colors duration-150 ease-smooth',
@@ -193,11 +198,18 @@ export function IconRailContent({ toggleButton }: IconRailContentProps) {
           }
         >
           <Settings className="h-4 w-4 shrink-0" />
-          <span className="pointer-events-none absolute left-full ml-2 whitespace-nowrap rounded bg-elevated px-2 py-1 text-xs text-foreground opacity-0 shadow-lg group-hover:opacity-100 transition-opacity z-50">
-            设置
-          </span>
         </NavLink>
       </div>
+
+      {/* Fixed 定位 tooltip — 绕开 aside overflow-hidden */}
+      {tooltip && (
+        <div
+          className="fixed z-[9999] pointer-events-none whitespace-nowrap rounded bg-elevated px-2 py-1 text-xs text-foreground shadow-lg"
+          style={{ left: tooltip.x, top: tooltip.y, transform: 'translateY(-50%)' }}
+        >
+          {tooltip.text}
+        </div>
+      )}
     </div>
   )
 }
