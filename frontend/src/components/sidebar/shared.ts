@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import {
   LayoutDashboard,
   Star,
@@ -20,7 +19,6 @@ import {
 } from 'lucide-react'
 import { api, type IndexQuote } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { tierRank } from '@/lib/capability-labels'
 import { useToggleRealtimeQuotes } from '@/lib/useSharedMutations'
 
 // 品牌色 — 只用于 logo / brand 区域
@@ -140,39 +138,23 @@ export function useVisibleNavItems(analysisMenus: AnalysisMenusData, prefs: Pref
 }
 
 // ===== 实时行情开关 toggle hook (SidebarContent + IconRailContent 共享) =====
-type PrefsForToggle = {
-  realtime_watchlist_symbols?: string[]
-} | undefined
 
 /**
- * 实时行情开关逻辑：开启时重新校验档位，Free 档跳转 watchlist，交易时段刷新行情。
- * 提取自 Layout.tsx handleToggle，避免两组件重复实现。
+ * 实时行情开关逻辑：直接调 API，后端校验档位。
+ * 与设置页 Monitoring.tsx 的 handleToggleQuote 保持一致，
+ * 不在前端拦截 None 档（后端会返回 realtime_allowed: false，UI 自动更新为关闭态）。
  */
-export function useRealtimeToggle(prefs: PrefsForToggle, isTrading: boolean) {
-  const qc = useQueryClient()
-  const navigate = useNavigate()
+export function useRealtimeToggle(_prefs: unknown, isTrading: boolean) {
   const toggleQuote = useToggleRealtimeQuotes()
 
   const handleToggle = useCallback(
     async (enabled: boolean) => {
-      if (enabled) {
-        const fresh = await qc.fetchQuery({
-          queryKey: QK.capabilities,
-          queryFn: api.capabilities,
-        })
-        const freshTier = tierRank(fresh.label ?? '')
-        if (freshTier < 0) return
-        if (freshTier === 0 && (prefs?.realtime_watchlist_symbols?.length ?? 0) === 0) {
-          navigate('/watchlist')
-          return
-        }
-      }
       await toggleQuote.mutateAsync(enabled)
       if (enabled && isTrading) {
         api.intradayRefresh().catch(() => {})
       }
     },
-    [qc, navigate, toggleQuote, prefs, isTrading],
+    [toggleQuote, isTrading],
   )
 
   return { handleToggle, toggleQuote }
