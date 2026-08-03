@@ -85,6 +85,10 @@ CLAUDE.md
 # ===== 私人脚本(不开源) =====
 docs/zhihu/
 
+# ===== AI 辅助开发中间产物 (设计文档/实现计划, 不入库) =====
+docs/superpowers/
+.codebuddy.md
+
 # ===== 用户自定义策略(私有,不开源) =====
 data/strategies/custom/
 
