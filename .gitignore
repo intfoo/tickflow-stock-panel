@@ -26,6 +26,7 @@ node_modules/
 .pnpm-debug.log*
 .npm/
 *.log
+package-lock.json
 
 # ===== Vite =====
 frontend/dist/

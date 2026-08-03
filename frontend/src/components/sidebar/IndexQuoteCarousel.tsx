@@ -48,7 +48,7 @@ export function IndexQuoteCarousel({
       to={`/indices?symbol=${encodeURIComponent(item.symbol)}`}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
-      className="block mx-1 my-1 rounded bg-elevated/60 px-1.5 py-1.5 hover:bg-elevated transition-colors overflow-hidden"
+      className="block w-14 my-1 rounded bg-elevated/60 px-1.5 py-1.5 hover:bg-elevated transition-colors overflow-hidden"
       title={`${item.name} ${item.symbol}`}
     >
       <motion.div
@@ -63,7 +63,7 @@ export function IndexQuoteCarousel({
             {fmtIndexPct(pct)}
           </span>
         </div>
-        <div className={`mt-0.5 truncate font-mono text-[10px] ${indexPctClass(pct)}`}>
+        <div className={`mt-0.5 truncate font-mono text-[9px] ${indexPctClass(pct)}`}>
           {fmtIndexValue(value)}
         </div>
       </motion.div>

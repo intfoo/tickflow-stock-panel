@@ -106,7 +106,7 @@ export function SidebarContent({ onNavigate, toggleButton }: SidebarContentProps
   const visibleNavItems = useVisibleNavItems(analysisMenus, prefs)
 
   // ===== 实时行情开关逻辑（共享 hook）=====
-  const { handleToggle, toggleQuote } = useRealtimeToggle(prefs, isTrading)
+  const { handleToggle, toggleQuote } = useRealtimeToggle(isTrading)
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -125,8 +125,9 @@ export function SidebarContent({ onNavigate, toggleButton }: SidebarContentProps
             <div>TickFlow</div>
             <div>Stock Panel</div>
           </div>
-          {/* 桌面三态切换按钮 — 由 DesktopSidebar 注入 */}
-          {toggleButton}
+          {/* 桌面三态切换按钮 — 由 DesktopSidebar 注入，靠右放置（负 margin 抵消 px-5 右侧 padding） */}
+          <div className="flex-1" />
+          <div className="-mr-3">{toggleButton}</div>
         </div>
 
         <div className="mt-2.5 text-[10px] uppercase tracking-[0.22em] text-secondary">

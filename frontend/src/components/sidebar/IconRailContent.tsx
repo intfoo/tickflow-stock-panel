@@ -93,7 +93,7 @@ export function IconRailContent({ toggleButton }: IconRailContentProps) {
   const dotClass = tierDotColor[tierBase] || tierDotColor.none
 
   // ===== 共享 hook：实时行情开关逻辑 + 导航项合并 =====
-  const { handleToggle, toggleQuote } = useRealtimeToggle(prefs, isTrading)
+  const { handleToggle, toggleQuote } = useRealtimeToggle(isTrading)
   const visibleNavItems = useVisibleNavItems(analysisMenus, prefs)
 
   // 实时行情按钮状态文字
@@ -107,33 +107,40 @@ export function IconRailContent({ toggleButton }: IconRailContentProps) {
   const realtimeModeLabel = isWatchlistMode ? '自选股' : realtimeProviderName || '全市场'
 
   return (
-    <div className="flex flex-col h-full min-h-0 items-center">
+    <div className="flex flex-col h-full min-h-0 w-14">
       {/* Logo 缩略 + 档位色点角标 */}
-      <div className="relative py-3 shrink-0">
+      <div className="relative py-3 shrink-0 w-14 h-10 flex justify-center items-center">
         <Logo size={24} style={{ color: BRAND }} />
         <span
-          className={`absolute bottom-1.5 right-0 h-2 w-2 rounded-full ${dotClass}`}
+          className={`absolute bottom-2 right-3 h-2 w-2 rounded-full ${dotClass}`}
           title={caps?.label || 'None'}
         />
       </div>
 
       {/* 切换按钮 */}
-      {toggleButton && <div className="shrink-0">{toggleButton}</div>}
+      {toggleButton && <div className="shrink-0 w-14 flex justify-center">{toggleButton}</div>}
 
       {/* Nav 仅 icon */}
-      <nav className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden w-full px-1 py-2 space-y-1">
+      <nav className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden w-14 py-2 space-y-1">
         {visibleNavItems.map(({ to, label, icon: Icon, badge }) => (
           <NavLink
             key={to}
             to={to}
             onMouseEnter={(e) => showTooltip(<>{label}{badge && <span className="ml-1 text-amber-400">[{badge}]</span>}</>, e)}
             onMouseLeave={hideTooltip}
-            className="group relative flex items-center justify-center h-9 rounded-btn transition-colors duration-150 ease-smooth text-foreground/80 hover:bg-elevated hover:text-foreground"
+            className={({ isActive }) =>
+              cn(
+                'group relative flex items-center justify-center h-9 w-14 rounded-btn transition-colors duration-150 ease-smooth',
+                isActive
+                  ? 'bg-accent/15 text-accent'
+                  : 'text-foreground/80 hover:bg-elevated hover:text-foreground',
+              )
+            }
           >
             {({ isActive }) => (
               <>
                 <Icon
-                  className={cn('h-4 w-4 shrink-0', isActive && 'text-foreground')}
+                  className={cn('h-4 w-4 shrink-0', isActive && 'text-accent')}
                 />
                 {/* 数据同步状态角标 */}
                 {to === '/data' && isDataSyncing && (
@@ -161,7 +168,7 @@ export function IconRailContent({ toggleButton }: IconRailContentProps) {
           disabled={toggleQuote.isPending || isPaused}
           onMouseEnter={(e) => showTooltip(`实时行情 · ${realtimeModeLabel} · ${realtimeStatusText}`, e)}
           onMouseLeave={hideTooltip}
-          className="group relative mb-1 flex h-9 w-9 items-center justify-center rounded-btn transition-colors duration-150 ease-smooth hover:bg-elevated disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+          className="group relative mt-4 mb-1 flex h-9 w-14 items-center justify-center rounded-btn transition-colors duration-150 ease-smooth hover:bg-elevated disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
         >
           <RadioTower
             className={cn(
@@ -182,17 +189,19 @@ export function IconRailContent({ toggleButton }: IconRailContentProps) {
       )}
 
       {/* 底部：主题 + 设置 */}
-      <div className="border-t border-border py-2 shrink-0 flex flex-col items-center gap-1">
-        <ThemeToggle />
+      <div className="border-t border-border py-2 shrink-0 flex flex-col gap-1 w-14">
+        <div className="w-14 flex justify-center">
+          <ThemeToggle />
+        </div>
         <NavLink
           to="/settings"
           onMouseEnter={(e) => showTooltip('设置', e)}
           onMouseLeave={hideTooltip}
           className={({ isActive }) =>
             cn(
-              'group relative flex h-9 w-9 items-center justify-center rounded-btn transition-colors duration-150 ease-smooth',
+              'group relative flex h-9 w-14 items-center justify-center rounded-btn transition-colors duration-150 ease-smooth',
               isActive
-                ? 'bg-elevated text-foreground'
+                ? 'bg-accent/15 text-accent'
                 : 'text-foreground/80 hover:bg-elevated hover:text-foreground',
             )
           }

@@ -40,7 +40,7 @@ export function Layout() {
   }, [alertsTotalQuery.data])
 
   return (
-    <div className="h-screen flex bg-base text-foreground overflow-hidden">
+    <div className="h-screen flex bg-base text-foreground overflow-hidden relative">
       {isDesktop ? <DesktopSidebar /> : <MobileDrawer />}
       <motion.main
         initial={{ opacity: 0, y: 8 }}

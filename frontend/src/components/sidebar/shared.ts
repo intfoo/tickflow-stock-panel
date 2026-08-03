@@ -144,7 +144,7 @@ export function useVisibleNavItems(analysisMenus: AnalysisMenusData, prefs: Pref
  * 与设置页 Monitoring.tsx 的 handleToggleQuote 保持一致，
  * 不在前端拦截 None 档（后端会返回 realtime_allowed: false，UI 自动更新为关闭态）。
  */
-export function useRealtimeToggle(_prefs: unknown, isTrading: boolean) {
+export function useRealtimeToggle(isTrading: boolean) {
   const toggleQuote = useToggleRealtimeQuotes()
 
   const handleToggle = useCallback(

@@ -29,10 +29,10 @@ export function MobileDrawer() {
       {/* FAB 汉堡按钮 — 左上角悬浮 */}
       <button
         onClick={() => setOpen(true)}
-        className="fixed left-3 top-3 z-40 flex h-10 w-10 items-center justify-center rounded-full bg-surface/90 backdrop-blur-md border border-border shadow-lg text-foreground hover:bg-elevated cursor-pointer"
+        className="fixed left-2 top-2 z-40 flex h-8 w-8 items-center justify-center rounded-full bg-surface/70 backdrop-blur-sm border border-border shadow-lg text-accent hover:bg-surface cursor-pointer transition-all"
         aria-label="打开菜单"
       >
-        <Menu className="h-5 w-5" />
+        <Menu className="h-4 w-4 stroke-[2.5]" />
       </button>
 
       <AnimatePresence>
