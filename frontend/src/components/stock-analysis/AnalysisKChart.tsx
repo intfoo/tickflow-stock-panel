@@ -1,5 +1,6 @@
 import { useEffect, useRef, useMemo, useState } from 'react'
 import { chartTheme, getTheme, useTheme } from '@/lib/theme'
+import { getColorMode, useColorMode } from '@/lib/colorMode'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import type { KlineRow, LevelSeries } from '@/lib/api'
@@ -20,15 +21,10 @@ import type { KlineRow, LevelSeries } from '@/lib/api'
  */
 
 // ===== 配色(红涨绿跌, 双主题通用); 画布轴/网格主题相关色走 CT() =====
-const THEME = {
-  bull: '#C74040',
-  bear: '#2D9B65',
-  volUp: 'rgba(240,68,56,0.5)',
-  volDown: 'rgba(18,183,106,0.5)',
-}
+// (bull/bear/volUp/volDown 已迁移至 CT() —— 响应配色切换)
 
 /** 当前主题的图表调色板 (buildOption 渲染时调用; 切换由组件 effect 触发重建)。 */
-const CT = () => chartTheme(getTheme())
+const CT = () => chartTheme(getTheme(), getColorMode())
 
 // ===== 价位类型(与后端 levels.py 的 LEVEL_TYPES 对齐) =====
 export type LevelType = 'sr' | 'pivot' | 'extreme' | 'boll' | 'keltner_s' | 'keltner_m' | 'keltner_l' | 'atr_stop' | 'gap' | 'fib' | 'round'
@@ -129,6 +125,7 @@ export function AnalysisKChart({
   const seriesKeyMapRef = useRef<Map<number, string>>(new Map())
   // 主题: buildOption 内部用 CT() 动态取色, 这里只负责切换时触发重建
   const theme = useTheme()
+  const colorMode = useColorMode()
   const [activeTypes, setActiveTypes] = useState<Set<LevelType>>(new Set(defaultLevelTypes))
   /** 枢轴点显示到第几档:1=只P+R1/S1, 2=到R2/S2, 3=全档(R3/S3) */
   const [pivotRank, setPivotRank] = useState<1 | 2 | 3>(1)
@@ -141,7 +138,7 @@ export function AnalysisKChart({
     const candle = rows.map(r => [r.open, r.close, r.low, r.high])
     const vols = rows.map(r => ({
       value: r.volume ?? 0,
-      itemStyle: { color: r.close >= r.open ? THEME.volUp : THEME.volDown },
+      itemStyle: { color: r.close >= r.open ? CT().bullAlpha(0.5) : CT().bearAlpha(0.5) },
     }))
     const dateIndex = new Map(dates.map((d, i) => [d, i]))
     // 默认显示最近 6 个月 ≈ 120 个交易日;数据不足则全部显示
@@ -228,8 +225,8 @@ export function AnalysisKChart({
         // z=2 让蜡烛始终在价位线(z=1)之上, hover 高亮价位线时不会被遮挡/变淡
         z: 2,
         itemStyle: {
-          color: THEME.bull, color0: THEME.bear,
-          borderColor: THEME.bull, borderColor0: THEME.bear,
+          color: CT().bull, color0: CT().bear,
+          borderColor: CT().bull, borderColor0: CT().bear,
         },
         markPoint: markPointData.length ? { data: markPointData, animation: false } : undefined,
         markArea: markAreaData.length ? { silent: true, data: markAreaData } : undefined,
@@ -391,7 +388,7 @@ export function AnalysisKChart({
     }
     chartInstRef.current.setOption(buildOption(), true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, levels, series, seriesDates, activeTypes, pivotRank, markers, ranges, height, theme, hoveredKey])
+  }, [rows, levels, series, seriesDates, activeTypes, pivotRank, markers, ranges, height, theme, colorMode, hoveredKey])
 
   // resize
   useEffect(() => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { chartTheme, getTheme, useTheme } from '@/lib/theme'
+import { getColorMode, useColorMode } from '@/lib/colorMode'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 
@@ -142,7 +143,7 @@ export const SUB_CHARTS: SubChartDef[] = [
               value: d.volume ?? 0,
               volumeRatioLabel: ratio == null ? '' : fmtVolumeRatio(ratio, 1),
               itemStyle: {
-                color: d.close >= d.open ? 'rgba(240,68,56,0.6)' : 'rgba(18,183,106,0.6)',
+                color: d.close >= d.open ? CT().bullAlpha(0.6) : CT().bearAlpha(0.6),
               },
             }
           }),
@@ -180,7 +181,7 @@ export const SUB_CHARTS: SubChartDef[] = [
     buildInfo: (d) => {
       if (!d) return []
       return [
-        { label: '量', color: d.close >= d.open ? '#C74040' : '#2D9B65', value: fmtVol(d.volume) },
+        { label: '量', color: d.close >= d.open ? CT().bull : CT().bear, value: fmtVol(d.volume) },
       ]
     },
   },
@@ -213,7 +214,7 @@ export const SUB_CHARTS: SubChartDef[] = [
           if (v == null) return '-'
           return {
             value: Number(v),
-            itemStyle: { color: Number(v) >= 0 ? 'rgba(240,68,56,0.6)' : 'rgba(18,183,106,0.6)' },
+            itemStyle: { color: Number(v) >= 0 ? CT().bullAlpha(0.6) : CT().bearAlpha(0.6) },
           }
         }),
         barWidth: '40%',
@@ -225,7 +226,7 @@ export const SUB_CHARTS: SubChartDef[] = [
       return [
         { label: 'DIF', color: '#FACC15', value: d.macd_dif != null ? d.macd_dif.toFixed(3) : '—' },
         { label: 'DEA', color: '#8B5CF6', value: d.macd_dea != null ? d.macd_dea.toFixed(3) : '—' },
-        { label: 'MACD', color: d.macd_hist != null && d.macd_hist >= 0 ? '#C74040' : '#2D9B65', value: d.macd_hist != null ? d.macd_hist.toFixed(3) : '—' },
+        { label: 'MACD', color: d.macd_hist != null && d.macd_hist >= 0 ? CT().bull : CT().bear, value: d.macd_hist != null ? d.macd_hist.toFixed(3) : '—' },
       ]
     },
   },
@@ -342,10 +343,6 @@ interface Props {
 
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
 const THEME = {
-  bull: '#C74040',
-  bear: '#2D9B65',
-  bullAlpha: 'rgba(240,68,56,0.7)',
-  bearAlpha: 'rgba(18,183,106,0.7)',
   ma5: '#A1A1AA',
   ma10: '#3B82F6',
   ma20: '#F97316',
@@ -354,7 +351,7 @@ const THEME = {
 }
 
 /** 当前主题的图表调色板 (buildOption/信息栏在渲染时调用; 主题切换由组件 effect 触发重建)。 */
-const CT = () => chartTheme(getTheme())
+const CT = () => chartTheme(getTheme(), getColorMode())
 
 /** 可见蜡烛超过此数量时，涨停/炸板标签切换为小圆点。 */
 const COMPACT_THRESHOLD = 60
@@ -395,7 +392,7 @@ function buildSubInfoGraphics(
         const ratio = volumeRatioAt(data, infoIdx, volumeCompare.days)
         items.push({
           label: `量比${volumeCompare.days}`,
-          color: ratio != null && ratio >= 1 ? '#C74040' : '#2D9B65',
+          color: ratio != null && ratio >= 1 ? CT().bull : CT().bear,
           value: fmtVolumeRatio(ratio),
         })
       }
@@ -515,7 +512,7 @@ function buildOption(
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
           symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          itemStyle: { color: isBuy ? CT().bull : isSell ? CT().bear : CT().text },
           label: {
             show: !!m.label, formatter: m.label ?? '',
             position: isBuy ? 'bottom' : 'top', distance: 8,
@@ -649,8 +646,8 @@ function buildOption(
     name: 'K', type: 'candlestick', data: candleData,
     animation: false,
     itemStyle: {
-      color: THEME.bull, color0: THEME.bear,
-      borderColor: THEME.bull, borderColor0: THEME.bear,
+      color: CT().bull, color0: CT().bear,
+      borderColor: CT().bull, borderColor0: CT().bear,
       cursor: 'pointer',
     },
     markPoint: markPointData.length > 0 ? { data: markPointData, animation: false } : undefined,
@@ -803,6 +800,7 @@ export function EChartsCandlestick({
   onDateClickRef.current = onDateClick
   // 主题: buildOption/信息栏内部通过 CT() 动态取调色板, 这里只负责切换时触发重建
   const theme = useTheme()
+  const colorMode = useColorMode()
 
   // --- 全部用 ref，避免高频交互触发 React 重渲染 ---
   const infoIdxRef = useRef<number>(data.length - 1)
@@ -883,18 +881,18 @@ export function EChartsCandlestick({
     const prev = idx > 0 ? data[idx - 1] : null
     const chg = prev ? d.close - prev.close : 0
     const isUp = chg >= 0
-    const clr = isUp ? THEME.bull : THEME.bear
+    const clr = isUp ? CT().bull : CT().bear
     const floatShares = stockInfo?.float_shares
     const turnoverRate = floatShares && d.volume ? (d.volume * 100 / floatShares * 100) : null
 
     let html = `<div style="display:flex;align-items:center;gap:6px;padding:0 8px;font:11px 'JetBrains Mono',monospace;select:none;height:20px;flex-wrap:wrap">`
     html += `<span style="color:${CT().text}">${d.date}</span>`
     html += `<span style="color:${CT().text}">开</span>`
-    html += `<span style="color:${d.open >= d.close ? THEME.bear : THEME.bull}">${d.open.toFixed(2)}</span>`
+    html += `<span style="color:${d.open >= d.close ? CT().bear : CT().bull}">${d.open.toFixed(2)}</span>`
     html += `<span style="color:${CT().text}">高</span>`
-    html += `<span style="color:${THEME.bull}">${d.high.toFixed(2)}</span>`
+    html += `<span style="color:${CT().bull}">${d.high.toFixed(2)}</span>`
     html += `<span style="color:${CT().text}">低</span>`
-    html += `<span style="color:${THEME.bear}">${d.low.toFixed(2)}</span>`
+    html += `<span style="color:${CT().bear}">${d.low.toFixed(2)}</span>`
     html += `<span style="color:${CT().text}">收</span>`
     html += `<span style="color:${clr};font-weight:600">${d.close.toFixed(2)}</span>`
     // 涨跌幅 (收盘后, 换手前; 和收间隔一些距离)
@@ -1056,7 +1054,7 @@ export function EChartsCandlestick({
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
           symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          itemStyle: { color: isBuy ? CT().bull : isSell ? CT().bear : CT().text },
           label: {
             show: !!m.label, formatter: m.label ?? '',
             position: isBuy ? 'bottom' : 'top', distance: 8,
@@ -1113,7 +1111,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, colorMode])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {
@@ -1125,14 +1123,14 @@ export function EChartsCandlestick({
     let html = `<div style="display:flex;align-items:center;gap:6px;padding:0 8px;font:11px 'JetBrains Mono',monospace;height:20px;flex-wrap:wrap">`
     html += `<span style="color:${CT().text}">${d.date}</span>`
     html += `<span style="color:${CT().text}">开</span>`
-    html += `<span style="color:${d.open >= d.close ? THEME.bear : THEME.bull}">${d.open.toFixed(2)}</span>`
+    html += `<span style="color:${d.open >= d.close ? CT().bear : CT().bull}">${d.open.toFixed(2)}</span>`
     html += `<span style="color:${CT().text}">高</span>`
-    html += `<span style="color:${THEME.bull}">${d.high.toFixed(2)}</span>`
+    html += `<span style="color:${CT().bull}">${d.high.toFixed(2)}</span>`
     html += `<span style="color:${CT().text}">低</span>`
-    html += `<span style="color:${THEME.bear}">${d.low.toFixed(2)}</span>`
+    html += `<span style="color:${CT().bear}">${d.low.toFixed(2)}</span>`
     html += `<span style="color:${CT().text}">收</span>`
     const prevClose0 = data[idx-1]?.close ?? d.close
-    const clr0 = d.close >= prevClose0 ? THEME.bull : THEME.bear
+    const clr0 = d.close >= prevClose0 ? CT().bull : CT().bear
     html += `<span style="color:${clr0};font-weight:600">${d.close.toFixed(2)}</span>`
     // 涨跌幅 (收盘后, 换手前; 和收间隔一些距离)
     if (idx > 0) {
@@ -1157,7 +1155,7 @@ export function EChartsCandlestick({
     }
     return html
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [colorMode])
 
   return (
     <div className="w-full">

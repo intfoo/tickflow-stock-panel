@@ -5,7 +5,7 @@
  */
 import { useState, useCallback, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info } from 'lucide-react'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info, Palette } from 'lucide-react'
 import { usePreferences, useVersion } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -15,12 +15,14 @@ import { SOUND_OPTIONS, previewSound } from '@/lib/notificationSound'
 import {
   listZhVoices, previewVoice, activateVoice, getCurrentVoiceURI,
 } from '@/lib/voiceBroadcast'
+import { useColorMode, setColorMode, COLOR_MODES } from '@/lib/colorMode'
 
 export function SettingsSystemPanel() {
   const qc = useQueryClient()
   const { data: prefs } = usePreferences()
   const { data: versionData } = useVersion()
   const [saving, setSaving] = useState(false)
+  const currentMode = useColorMode()
 
   const screenerAutoRun = prefs?.screener_auto_run ?? true
   const [clearing, setClearing] = useState(false)
@@ -116,6 +118,57 @@ export function SettingsSystemPanel() {
           disabled={saving}
           onChange={(v) => save({ screener_auto_run: v })}
         />
+      </section>
+
+      <section className="rounded-card border border-border bg-surface p-5 mt-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Palette className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-medium text-foreground">涨跌配色</h3>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 py-2">
+          <div className="min-w-0">
+            <div className="text-sm text-foreground">涨跌颜色预设</div>
+            <div className="text-[11px] text-muted truncate">选择涨跌颜色方案，摸鱼场景可替换为低敏感度中性配色</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mt-2">
+          {COLOR_MODES.map(mode => {
+            const active = currentMode === mode.id
+            return (
+              <button
+                key={mode.id}
+                onClick={() => setColorMode(mode.id)}
+                title={mode.desc}
+                className={`rounded-btn border p-2 text-left transition-all cursor-pointer ${
+                  active
+                    ? 'border-accent ring-2 ring-accent/20 bg-accent/5'
+                    : 'border-border hover:border-accent/40 bg-base'
+                }`}
+              >
+                <div className="text-[11px] font-medium text-foreground mb-1.5 truncate">{mode.label}</div>
+                <div className="space-y-0.5 mb-1.5">
+                  <div className="flex items-center gap-0.5 text-[10px] font-mono" style={{ color: mode.bullHex }}>
+                    <span>▲</span><span>+3.66%</span>
+                  </div>
+                  <div className="flex items-center gap-0.5 text-[10px] font-mono" style={{ color: mode.bearHex }}>
+                    <span>▼</span><span>-2.15%</span>
+                  </div>
+                </div>
+                <div className="flex gap-0.5">
+                  <span className="h-2.5 flex-1 rounded-sm" style={{ background: mode.bullHex }} />
+                  <span className="h-2.5 flex-1 rounded-sm" style={{ background: mode.bearHex }} />
+                </div>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="mt-3 flex items-start gap-1.5 text-[11px] text-muted">
+          <Info className="h-3 w-3 mt-px shrink-0" />
+          <span>仅影响涨跌颜色显示，不改变涨跌判断逻辑</span>
+        </div>
       </section>
 
       <section className="rounded-card border border-border bg-surface p-5 mt-6">

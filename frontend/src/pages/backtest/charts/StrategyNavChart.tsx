@@ -53,7 +53,7 @@ export function StrategyNavChart({ result }: Props) {
     const hasPosition = positionValues.some(v => v != null)
     const navColor = '#3b82f6'
     const benchmarkColor = '#64748b'
-    const drawdownColor = '#f04438'
+    const drawdownColor = ct.bull
     const positionColor = '#f59e0b'
 
     return {
@@ -225,7 +225,7 @@ export function StrategyNavChart({ result }: Props) {
           symbol: 'none',
           itemStyle: { color: drawdownColor },
           lineStyle: { color: drawdownColor, opacity: 0.65, width: 1 },
-          areaStyle: { color: 'rgba(240,68,56,0.12)' },
+          areaStyle: { color: ct.bullAlpha(0.12) },
         },
         ...(hasPosition && !hidden.has('仓位') ? [{
           name: '仓位',
@@ -254,7 +254,7 @@ export function StrategyNavChart({ result }: Props) {
           策略净值
         </span>
         <span className="flex items-center gap-1.5 text-[10px] text-secondary">
-          <span className="w-3 h-0.5 rounded bg-[#f04438]" />
+          <span className="w-3 h-0.5 rounded bg-bull" />
           回撤
         </span>
         {result.equity_curve.some(r => r.exposure != null || (r.cash != null && r.value > 0)) && (

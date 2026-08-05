@@ -23,7 +23,7 @@ export function ReturnDistributionChart({ distribution }: { distribution: DistBi
       const lo = parseFloat(d.range)
       // 中心档(跨 0) 用中性色
       if (lo < 0 && parseFloat(d.range.split('~')[1]) > 0) return ct.text
-      return lo >= 0 ? '#ef4444' : '#22c55e'
+      return lo >= 0 ? ct.bull : ct.bear
     })
 
     return {
