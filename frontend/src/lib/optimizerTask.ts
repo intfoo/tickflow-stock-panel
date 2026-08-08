@@ -62,6 +62,7 @@ export interface StartOptimizeParams {
   symbols?: string[] | null
   start?: string | null
   end?: string | null
+  asset_type?: string
   matching?: string
   fees_pct?: number
   commission_pct?: number
@@ -231,6 +232,7 @@ export function startOptimize(params: StartOptimizeParams): void {
     symbols: params.symbols?.join(','),
     start: params.start ?? undefined,
     end: params.end ?? undefined,
+    asset_type: params.asset_type,
     matching: params.matching,
     fees_pct: params.fees_pct,
     commission_pct: params.commission_pct,

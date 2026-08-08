@@ -574,7 +574,7 @@ def _json_safe(obj):
 _OPT_BT_FIELDS = [
     "matching", "fees_pct", "commission_pct", "stamp_tax_pct", "slippage_bps",
     "max_positions", "max_exposure_pct", "initial_capital", "position_sizing",
-    "mode", "holding_days",
+    "mode", "holding_days", "asset_type",
 ]
 
 
@@ -601,6 +601,7 @@ def _make_opt_job_key(
 def _opt_backtest_kwargs(
     matching, fees_pct, commission_pct, stamp_tax_pct, slippage_bps,
     max_positions, max_exposure_pct, initial_capital, position_sizing, mode, holding_days,
+    asset_type="stock",
 ) -> dict:
     return {
         "matching": matching,
@@ -614,6 +615,7 @@ def _opt_backtest_kwargs(
         "position_sizing": position_sizing,
         "mode": mode,
         "holding_days": int(holding_days),
+        "asset_type": asset_type,
     }
 
 
@@ -642,6 +644,7 @@ async def optimize_stream(
     position_sizing: str = "equal",
     mode: str = "position",
     holding_days: int = 5,
+    asset_type: str = "stock",
 ):
     """SSE 流式参数优化: 并行跑各参数组回测, 按 objective 排序。
 
@@ -669,6 +672,7 @@ async def optimize_stream(
     bt_kwargs = _opt_backtest_kwargs(
         matching, fees_pct, commission_pct, stamp_tax_pct, slippage_bps,
         max_positions, max_exposure_pct, initial_capital, position_sizing, mode, holding_days,
+        asset_type,
     )
     bt_sig = "|".join(f"{k}={bt_kwargs[k]}" for k in _OPT_BT_FIELDS)
     job_key = _make_opt_job_key(
@@ -854,6 +858,7 @@ async def walkforward_stream(
     position_sizing: str = "equal",
     mode: str = "position",
     holding_days: int = 5,
+    asset_type: str = "stock",
 ):
     """SSE 流式 walk-forward: 每折训练区间网格优化 -> 测试区间 OOS 回测。
 
@@ -874,6 +879,7 @@ async def walkforward_stream(
     bt_kwargs = _opt_backtest_kwargs(
         matching, fees_pct, commission_pct, stamp_tax_pct, slippage_bps,
         max_positions, max_exposure_pct, initial_capital, position_sizing, mode, holding_days,
+        asset_type,
     )
     bt_sig = "|".join(f"{k}={bt_kwargs[k]}" for k in _OPT_BT_FIELDS)
     windows = f"{train_days}/{test_days}/{step_days}"
