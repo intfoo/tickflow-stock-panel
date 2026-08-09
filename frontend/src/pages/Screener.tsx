@@ -550,6 +550,8 @@ export function Screener() {
         name: `策略监控 · ${strategyName}`,
         enabled: true,
         type: 'strategy',
+        // 跟随当前页面的资产类型: ETF 策略必须存 etf, 否则后端 validate_context 拒绝
+        asset_type: assetType,
         scope: 'all',
         symbols: [],
         sector: null,
