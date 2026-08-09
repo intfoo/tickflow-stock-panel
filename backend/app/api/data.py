@@ -41,6 +41,7 @@ _table_cache: dict[str, dict | None] = {
     "etf_daily": None,
     "etf_enriched": None,
     "etf_instruments": None,
+    "etf_adj_factor": None,
     "minute": None,
     "adj_factor": None,
     "instruments": None,
@@ -376,6 +377,37 @@ def _safe_aggregate_adj_factor(repo) -> dict | None:
         return None
 
 
+def _safe_aggregate_etf_adj_factor(repo) -> dict | None:
+    """adj_factor_etf 视图统计,日期范围对齐 ETF 日K覆盖区间。"""
+    try:
+        dr = repo.execute_one(
+            "SELECT min(date), max(date) FROM kline_etf_daily"
+        )
+        if not dr or not dr[0]:
+            return None
+        d_min, d_max = dr[0], dr[1]
+        row = repo.execute_one(
+            """SELECT count(*) AS rows,
+                      count(DISTINCT symbol) AS symbols,
+                      count(DISTINCT trade_date) AS trading_days
+               FROM adj_factor_etf
+               WHERE trade_date BETWEEN ? AND ?""",
+            [str(d_min), str(d_max)],
+        )
+        if not row or not row[0]:
+            return None
+        return {
+            "rows": int(row[0]),
+            "symbols_covered": int(row[1]) if isinstance(row[1], (int, float)) else 0,
+            "earliest_date": str(d_min),
+            "latest_date": str(d_max),
+            "trading_days": int(row[2] or 0),
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.debug("aggregate etf_adj_factor failed: %s", e)
+        return None
+
+
 def _safe_aggregate_minute(repo) -> dict | None:
     """kline_minute 统计 — 从分区目录名获取交易日数，跳过全表扫描。
 
@@ -599,6 +631,7 @@ def status(request: Request) -> dict:
     "etf_daily":         _get_table_stats("etf_daily",         lambda: _safe_aggregate_etf_daily(repo)),
     "etf_enriched":      _get_table_stats("etf_enriched",      lambda: _safe_aggregate_etf_enriched(repo)),
     "etf_instruments":   _get_table_stats("etf_instruments",   lambda: _safe_aggregate_etf_instruments(repo)),
+    "etf_adj_factor":    _get_table_stats("etf_adj_factor",    lambda: _safe_aggregate_etf_adj_factor(repo)),
     "minute":      _get_table_stats("minute",      lambda: _safe_aggregate_minute(repo)),
         "adj_factor":  _get_table_stats("adj_factor",  lambda: _safe_aggregate_adj_factor(repo)),
         "instruments": _get_table_stats("instruments", lambda: _safe_aggregate_instruments(repo)),

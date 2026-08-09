@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _REQUIRED = {
     "daily": {"symbol", "date", "open", "high", "low", "close", "volume", "amount"},
+    "etf": {"symbol", "date", "open", "high", "low", "close", "volume", "amount"},
     "adj_factor": {"symbol", "trade_date", "ex_factor"},
     "realtime": {"symbol", "last_price", "prev_close", "open", "high", "low", "volume"},
     "minute": {"symbol", "datetime", "open", "high", "low", "close", "volume", "amount"},
@@ -59,9 +60,13 @@ class GenericHTTPProvider:
                     errors.append(f"{dataset}: missing mapped fields: {', '.join(missing)}")
             if dataset != "realtime":
                 request_params = [cfg.symbols_param, cfg.start_param, cfg.end_param]
+                if dataset in {"minute", "daily", "etf", "adj_factor"}:
+                    request_params.extend(
+                        name for name in (cfg.asset_type_param,) if name
+                    )
                 if dataset == "minute":
                     request_params.extend(
-                        name for name in (cfg.asset_type_param, cfg.freq_param) if name
+                        name for name in (cfg.freq_param,) if name
                     )
                 duplicates = sorted({
                     name for name in request_params if request_params.count(name) > 1
@@ -78,15 +83,25 @@ class GenericHTTPProvider:
         symbols: list[str],
         start_time: datetime | None,
         end_time: datetime | None,
-        asset_type: str = "stock",  # noqa: ARG002
+        asset_type: str = "stock",
         on_chunk_done=None,
     ) -> pl.DataFrame:
-        cfg = self._dataset("daily")
+        # ETF 优先使用 "etf" dataset，未配则 fallback 到 "daily"
+        if asset_type == "etf" and "etf" in self.config.datasets:
+            cfg = self._dataset("etf")
+        else:
+            cfg = self._dataset("daily")
+        override: dict[str, Any] = {}
+        if cfg.asset_type_param:
+            override[cfg.asset_type_param] = asset_type
         frames: list[pl.DataFrame] = []
         chunks = chunked(symbols, cfg.batch)
         for i, chunk in enumerate(chunks):
             sleep_between_batches(i, cfg.rpm)
-            rows = self._request_rows(cfg, symbols=chunk, start_time=start_time, end_time=end_time)
+            rows = self._request_rows(
+                cfg, symbols=chunk, start_time=start_time, end_time=end_time,
+                override_params=override or None, override_body=override or None,
+            )
             df = self._mapped_frame(cfg, rows)
             df = normalize_daily(df, source=self.name)
             if not df.is_empty():
@@ -100,15 +115,22 @@ class GenericHTTPProvider:
         symbols: list[str],
         start_time: datetime | None,
         end_time: datetime | None,
-        asset_type: str = "stock",  # noqa: ARG002
+        asset_type: str = "stock",
         on_chunk_done=None,
     ) -> pl.DataFrame:
         cfg = self._dataset("adj_factor")
+        # 与 get_daily 一致: 配了 asset_type_param 才注入, 供上游区分 stock/ETF 因子
+        override: dict[str, Any] = {}
+        if cfg.asset_type_param:
+            override[cfg.asset_type_param] = asset_type
         frames: list[pl.DataFrame] = []
         chunks = chunked(symbols, cfg.batch)
         for i, chunk in enumerate(chunks):
             sleep_between_batches(i, cfg.rpm)
-            rows = self._request_rows(cfg, symbols=chunk, start_time=start_time, end_time=end_time)
+            rows = self._request_rows(
+                cfg, symbols=chunk, start_time=start_time, end_time=end_time,
+                override_params=override or None, override_body=override or None,
+            )
             df = self._mapped_frame(cfg, rows)
             df = normalize_adj_factors(df, source=self.name)
             if not df.is_empty():
@@ -230,7 +252,7 @@ class GenericHTTPProvider:
                 override_params=override or None,
                 override_body=override or None,
             )
-        elif dataset in {"daily", "adj_factor"}:
+        elif dataset in {"daily", "adj_factor", "etf"}:
             rows = self._request_rows(
                 cfg,
                 symbols=test_symbols,

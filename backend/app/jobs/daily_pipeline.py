@@ -167,11 +167,13 @@ def run_now(
         def _daily_chunk_progress(cur: int, tot: int) -> None:
             emit("sync_daily", 12 + int(33 * cur / tot),
                  f"日K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+        _on_fallback = lambda msg: emit("sync_daily", 12, f"⚠ {msg}", skip_log=False)
         written_daily = kline_sync.sync_and_persist_daily_batch(
             universe, repo, capset,
             start_date=_dt.combine(start_date, _dt.min.time()),
             end_date=_dt.combine(today, _dt.min.time()),
             on_chunk_done=_daily_chunk_progress,
+            on_fallback=_on_fallback,
         )
         gap_days = (today - start_date).days
         new_daily_days = gap_days
@@ -199,11 +201,13 @@ def run_now(
         def _daily_chunk_progress(cur: int, tot: int) -> None:
             emit("sync_daily", 12 + int(33 * cur / tot),
                  f"日K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+        _on_fallback = lambda msg: emit("sync_daily", 12, f"⚠ {msg}", skip_log=False)
         written_daily = kline_sync.sync_and_persist_daily_batch(
             universe, repo, capset,
             start_date=_dt.combine(start_date, _dt.min.time()),
             end_date=_dt.combine(today, _dt.min.time()),
             on_chunk_done=_daily_chunk_progress,
+            on_fallback=_on_fallback,
         )
         gap_days = (today - start_date).days
         new_daily_days = gap_days
@@ -219,11 +223,13 @@ def run_now(
         def _daily_chunk_progress(cur: int, tot: int) -> None:
             emit("sync_daily", 12 + int(33 * cur / tot),
                  f"日K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+        _on_fallback = lambda msg: emit("sync_daily", 12, f"⚠ {msg}", skip_log=False)
         written_daily = kline_sync.sync_and_persist_daily_batch(
             universe, repo, capset,
             start_date=_dt.combine(start_date, _dt.min.time()),
             end_date=_dt.combine(today, _dt.min.time()),
             on_chunk_done=_daily_chunk_progress,
+            on_fallback=_on_fallback,
         )
         new_daily_days = 365
         emit("sync_daily", 45, "日K 完成")

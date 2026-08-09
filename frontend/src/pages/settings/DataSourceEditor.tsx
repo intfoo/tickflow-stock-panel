@@ -9,11 +9,12 @@ import { toast } from '@/components/Toast'
 const INPUT_CLS =
   'w-full h-9 px-2.5 rounded-lg bg-base border-0 ring-1 ring-border/40 text-xs text-foreground placeholder:text-muted/30 focus:outline-none focus:ring-2 focus:ring-accent/40 transition-shadow'
 
-const DATASETS = ['daily', 'adj_factor', 'realtime', 'minute'] as const
+const DATASETS = ['daily', 'etf', 'adj_factor', 'realtime', 'minute'] as const
 type DatasetKey = typeof DATASETS[number]
 
 const DATASET_LABEL: Record<DatasetKey, string> = {
   daily: '日K',
+  etf: 'ETF日K',
   adj_factor: '除权因子',
   realtime: '实时行情',
   minute: '分钟K',
@@ -21,6 +22,7 @@ const DATASET_LABEL: Record<DatasetKey, string> = {
 
 const TARGET_FIELDS: Record<DatasetKey, string[]> = {
   daily: ['symbol', 'date', 'open', 'high', 'low', 'close', 'volume', 'amount'],
+  etf: ['symbol', 'date', 'open', 'high', 'low', 'close', 'volume', 'amount'],
   adj_factor: ['symbol', 'trade_date', 'ex_factor'],
   realtime: ['symbol', 'name', 'last_price', 'prev_close', 'open', 'high', 'low', 'volume', 'amount', 'change_pct', 'change_amount', 'amplitude', 'turnover_rate', 'timestamp', 'session'],
   minute: ['symbol', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'amount'],
@@ -256,7 +258,37 @@ export function DataSourceEditor({
 
             <div className="pt-2 border-t border-border/30 space-y-1.5">
               <div className="text-[10px] uppercase tracking-widest text-muted">数据集</div>
-              {DATASETS.map(key => {
+
+              {/* 日K分组 */}
+              <div className="text-xs text-muted/70 px-2.5 pt-1 pl-1 border-l-2 border-border/40">日K</div>
+              {(['daily', 'etf'] as DatasetKey[]).map(key => {
+                const enabled = !!config.datasets[key]
+                const label = key === 'daily' ? '股票日K' : 'ETF日K'
+                // 股票关闭 → 回退 TickFlow；ETF 关闭 → 跟随股票日K
+                const hint = enabled
+                  ? '已配置'
+                  : (key === 'daily' ? '回退 TF' : '跟随日K')
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setActiveTab(key)}
+                    className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-btn text-xs transition-colors ml-4 ${
+                      activeTab === key ? 'bg-elevated text-foreground' : 'text-secondary hover:bg-elevated/50'
+                    }`}
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${enabled ? 'bg-accent' : 'bg-muted/30'}`} />
+                    <span className="flex-1 text-left">{label}</span>
+                    <span className="text-[9px] text-muted/50">{hint}</span>
+                    <Toggle
+                      checked={enabled}
+                      onChange={(e) => { e?.stopPropagation(); setDatasetEnabled(key, !enabled) }}
+                    />
+                  </button>
+                )
+              })}
+
+              {/* 其他数据集（平级） */}
+              {(['adj_factor', 'realtime', 'minute'] as DatasetKey[]).map(key => {
                 const enabled = !!config.datasets[key]
                 return (
                   <button
@@ -486,7 +518,7 @@ function DatasetDetail({
                           </Field>
                         </>
                       )}
-                      {datasetKey === 'minute' && (
+                      {(datasetKey === 'minute' || datasetKey === 'daily' || datasetKey === 'etf') && (
                         <>
                           <Field label="资产类型参数">
                             <input
@@ -496,14 +528,16 @@ function DatasetDetail({
                               className={`${INPUT_CLS} w-full`}
                             />
                           </Field>
-                          <Field label="周期参数">
-                            <input
-                              value={cfg.freq_param ?? ''}
-                              onChange={e => onUpdate({ freq_param: e.target.value || null })}
-                              placeholder="period"
-                              className={`${INPUT_CLS} w-full`}
-                            />
-                          </Field>
+                          {datasetKey === 'minute' && (
+                            <Field label="周期参数">
+                              <input
+                                value={cfg.freq_param ?? ''}
+                                onChange={e => onUpdate({ freq_param: e.target.value || null })}
+                                placeholder="period"
+                                className={`${INPUT_CLS} w-full`}
+                              />
+                            </Field>
+                          )}
                         </>
                       )}
                       {datasetKey === 'realtime' && (
@@ -581,7 +615,11 @@ function DatasetDetail({
             className="py-12 text-center"
           >
             <div className="text-sm text-muted mb-1">{DATASET_LABEL[datasetKey]} 未启用</div>
-            <div className="text-[11px] text-muted/60">启用后此数据集将由该自定义源提供, 未启用则回退 TickFlow</div>
+            <div className="text-[11px] text-muted/60">
+              {datasetKey === 'etf'
+                ? '启用后ETF日K将由该自定义源提供, 未启用则跟随股票日K配置'
+                : '启用后此数据集将由该自定义源提供, 未启用则回退 TickFlow'}
+            </div>
             <button
               onClick={() => onToggle(true)}
               className="mt-3 inline-flex items-center gap-1 px-3 py-1.5 rounded-btn bg-accent/10 text-accent text-xs font-medium hover:bg-accent/20 transition-colors"

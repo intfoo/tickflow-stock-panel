@@ -73,6 +73,7 @@ def _refresh_single_view(repo: KlineRepository, name: str) -> None:
         "kline_enriched": f"{d}/kline_daily_enriched/**/*.parquet",
         "kline_minute": f"{d}/kline_minute/**/*.parquet",
         "adj_factor": f"{d}/adj_factor/**/*.parquet",
+        "adj_factor_etf": f"{d}/adj_factor_etf/**/*.parquet",
         "instruments": f"{d}/instruments/**/*.parquet",
     }
     path = paths.get(name)
@@ -105,6 +106,7 @@ def run_extend_history(
     value: int,
     unit: str,
     on_progress: Callable | None = None,
+    asset_type: str = "stock",
 ) -> dict:
     """向前扩展历史数据的主函数。
 
@@ -116,6 +118,107 @@ def run_extend_history(
     # 0. 计算时间偏移
     offset = compute_offset(value, unit)
     today = date.today()
+
+    if asset_type == "etf":
+        # 使用独立的 stage 名 'extend_history_etf', 与股票的 'extend_history' 区分,
+        # 前端 STAGE_CARD 据此把进度路由到 ETF 卡片而非日K卡片。
+        stage = "extend_history_etf"
+        # 获取 ETF 最早日期
+        emit(stage, 2, "检查当前 ETF 数据范围…")
+        earliest = repo.earliest_etf_daily_date()
+
+        if not earliest:
+            return {"error": "本地无 ETF 日K数据,请先执行一次完整同步"}
+
+        new_start = earliest - offset
+        if new_start >= earliest:
+            return {"error": "扩展范围无效,请增大时间跨度"}
+
+        # 解析 ETF 标的池
+        instruments = repo.get_etf_instruments()
+        if instruments.is_empty():
+            from app.services import index_sync as _idx_sync
+            _idx_sync.sync_etf_instruments(repo)
+            instruments = repo.get_etf_instruments()
+        if instruments.is_empty() or "symbol" not in instruments.columns:
+            return {"error": "ETF 标的池为空"}
+        universe = sorted(set(instruments["symbol"].to_list()))
+
+        start_str = new_start.strftime("%Y-%m-%d")
+        end_str = earliest.strftime("%Y-%m-%d")
+
+        # 先拉 ETF 复权因子: enriched 在日K同步内联计算, 需用最新因子保证复权口径
+        # (对齐股票路径 adj_factor → run_pipeline 的时序)
+        written_adj = 0
+        adj_start = datetime.combine(new_start, datetime.min.time())
+        adj_end = datetime.combine(today, datetime.min.time())
+        from app.services import preferences as _prefs
+        adj_provider = _prefs.get_adj_factor_provider()
+        if adj_provider == "same_as_daily":
+            adj_provider = _prefs.get_etf_data_provider_resolved()
+        can_sync_adj = capset.has(Cap.ADJ_FACTOR) or adj_provider != "tickflow"
+        if can_sync_adj:
+            emit(stage, 10, f"获取 ETF 除权因子 [{start_str} ~ {today.strftime('%Y-%m-%d')}]…")
+            _adj_chunk_etf = lambda cur, tot: emit(
+                stage, 10 + int(15 * cur / tot),
+                f"ETF 除权因子批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True,
+            )
+            written_adj, _ = kline_sync.sync_adj_factor(
+                universe, repo, capset,
+                start_time=adj_start, end_time=adj_end,
+                asset_type="etf",
+                on_chunk_done=_adj_chunk_etf,
+            )
+            emit(stage, 28, f"ETF 除权因子完成,{written_adj} 行")
+            # 刷新 adj_factor_etf 视图
+            _refresh_single_view(repo, "adj_factor_etf")
+            _invalidate("etf_adj_factor")
+        else:
+            emit(stage, 28, "ETF 除权因子跳过(无权限)")
+
+        # 拉 ETF 日 K（走自定义源分流; enriched 内部基于刚同步的因子逐 chunk 计算）
+        emit(stage, 30, f"获取 ETF 日K [{start_str} ~ {end_str}]…")
+        from app.services import index_sync
+        _daily_chunk_etf = lambda cur, tot: emit(
+            stage, 30 + int(50 * cur / tot),
+            f"ETF 日K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True,
+        )
+        _on_fallback_etf = lambda msg: emit(stage, 30, f"⚠ {msg}", skip_log=False)
+        written_daily = index_sync.sync_and_persist_etf_daily(
+            repo, capset,
+            start_date=datetime.combine(new_start, datetime.min.time()),
+            end_date=datetime.combine(earliest, datetime.min.time()),
+            on_chunk_done=_daily_chunk_etf,
+            on_fallback=_on_fallback_etf,
+        )
+        emit(stage, 82, f"ETF 日K完成,写入 {written_daily} 行")
+        _invalidate("etf_daily")
+        _invalidate("etf_enriched")
+
+        # ETF enriched 只写扩展区间窄表, 不重算旧区间: 若扩展区间新发现分红/拆分事件,
+        # 旧区间 enriched 前复权价会与新区间不连续, 给出可见提示 (设计决策, 见规格书风险3)
+        if written_adj > 0:
+            emit(stage, 85, f"提示: 新增 {written_adj} 条除权因子; 若扩展区间含分红/拆分, "
+                            "旧区间 enriched 前复权价可能不一致, 建议全量重同步 ETF 数据")
+
+        # 刷新视图
+        emit(stage, 95, "刷新视图…")
+        repo.refresh_index_views()
+        _invalidate(None)
+
+        etf_dir = repo.store.data_dir / "kline_etf_daily"
+        etf_days = len(list(etf_dir.glob("date=*"))) if etf_dir.exists() else 0
+
+        emit(stage, 100, f"完成,已扩展至 {new_start}")
+
+        return {
+            "earliest_before": earliest.isoformat(),
+            "earliest_after": new_start.isoformat(),
+            "daily_rows": written_daily,
+            "daily_days": etf_days,
+            "adj_factor_rows": written_adj,
+            "universe_size": len(universe),
+        }
 
     # 1. 获取当前最早日期
     emit("extend_history", 2, "检查当前数据范围…")
@@ -147,11 +250,13 @@ def run_extend_history(
         emit("extend_history", 10 + int(35 * cur / tot),
              f"日K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
 
+    _on_fallback = lambda msg: emit("extend_history", 10, f"⚠ {msg}", skip_log=False)
     written_daily = kline_sync.sync_and_persist_daily_batch(
         universe, repo, capset,
         start_date=datetime.combine(new_start, datetime.min.time()),
         end_date=datetime.combine(earliest, datetime.min.time()),
         on_chunk_done=_daily_chunk,
+        on_fallback=_on_fallback,
     )
     emit("extend_history", 45, f"日K 完成,写入 {written_daily} 行")
     logger.info("extend_history: daily K done, %d rows", written_daily)

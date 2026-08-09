@@ -33,10 +33,41 @@ def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
     (dev.sh 清端口用 kill -9)、reap 超时或断电时会留下半截文件, 之后复权视图
     scan_parquet 整条链路报错、enriched 全市场重算不出。临时文件后缀 .tmp 不匹配
     *.parquet glob, 不会被扫描误读。
+
+    Windows 上 tmp.replace(out) 可能因 DuckDB 视图 scan_parquet 或
+    polars read_parquet 的 mmap 句柄未及时释放而抛 PermissionError [WinError 5]。
+    重试若干次 (带短暂 sleep) 等待句柄释放; 仍失败则显式 gc 后再试一次。
     """
+    import gc
+    import os
+    import time
+
     tmp = out.with_name(out.name + ".tmp")
     df.write_parquet(tmp)
-    tmp.replace(out)  # 同目录 rename, POSIX/NTFS 均为原子操作
+    last_err: Exception | None = None
+    for attempt in range(5):
+        try:
+            tmp.replace(out)  # 同目录 rename, POSIX/NTFS 均为原子操作
+            return
+        except PermissionError as e:
+            last_err = e
+            gc.collect()
+            time.sleep(0.1 * (attempt + 1))
+        except OSError as e:
+            last_err = e
+            time.sleep(0.1 * (attempt + 1))
+    gc.collect()
+    try:
+        os.replace(tmp, out)
+        return
+    except (PermissionError, OSError) as e:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise PermissionError(
+            f"原子写 parquet 失败 (目标可能被占用): {out} -> {e}"
+        ) from last_err
 
 
 # 标准列(无论 SDK 返回什么形状,我们把它规范成这套)
@@ -160,6 +191,7 @@ def sync_and_persist_daily_batch(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     on_chunk_done: Callable[[int, int], None] | None = None,
+    on_fallback: Callable[[str], None] | None = None,
 ) -> int:
     """批量同步日 K 并落到 Parquet。返回写入的行数。
 
@@ -169,33 +201,27 @@ def sync_and_persist_daily_batch(
     if not symbols:
         return 0
 
-    provider_name = preferences.get_daily_data_provider()
-    if provider_name != "tickflow":
-        from app.data_providers import custom as custom_sources
-        if custom_sources.provider_has_dataset(provider_name, "daily"):
-            provider = custom_sources.get_provider(provider_name)
-            end_time = end_date or datetime.now()
-            days = count or 365
-            start_time = start_date or (end_time - timedelta(days=days))
-            df = provider.get_daily(
-                symbols,
-                start_time=start_time,
-                end_time=end_time,
-                on_chunk_done=on_chunk_done,
+    end_time_calc = end_date or datetime.now()
+    days_calc = count or 365
+    start_time_calc = start_date or (end_time_calc - timedelta(days=days_calc))
+    df_custom, fallback = _try_custom_daily(
+        symbols, start_time=start_time_calc, end_time=end_time_calc,
+        asset_type="stock", on_chunk_done=on_chunk_done, on_fallback=on_fallback,
+    )
+    if not fallback:
+        if df_custom is None or df_custom.is_empty():
+            return 0
+        repo.append_daily(df_custom)
+        try:
+            d = repo.store.data_dir.as_posix()
+            repo.db.execute(
+                f"""CREATE OR REPLACE VIEW kline_daily AS
+                    SELECT * FROM read_parquet('{d}/kline_daily/**/*.parquet', union_by_name=true)"""
             )
-            if df.is_empty():
-                return 0
-            repo.append_daily(df)
-            try:
-                d = repo.store.data_dir.as_posix()
-                repo.db.execute(
-                    f"""CREATE OR REPLACE VIEW kline_daily AS
-                        SELECT * FROM read_parquet('{d}/kline_daily/**/*.parquet', union_by_name=true)"""
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.warning("refresh view failed: %s", e)
-            return df.height
-        # 自定义源未配置 daily → 回退 TickFlow
+        except Exception as e:  # noqa: BLE001
+            logger.warning("refresh view failed: %s", e)
+        return df_custom.height
+    # 自定义源未配 / 异常 → fall through 到 TickFlow
 
     if not capset.has(Cap.KLINE_DAILY_BATCH):
         return 0
@@ -334,7 +360,8 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
 
     provider_name = preferences.get_adj_factor_provider()
     if provider_name == "same_as_daily":
-        provider_name = preferences.get_daily_data_provider()
+        # ETF 扩展时用 ETF 实际数据源 (可能独立配 etf_data_provider)
+        provider_name = preferences.get_etf_data_provider_resolved() if asset_type == "etf" else preferences.get_daily_data_provider()
     if provider_name != "tickflow":
         from app.data_providers import custom as custom_sources
         if custom_sources.provider_has_dataset(provider_name, "adj_factor"):
@@ -527,6 +554,92 @@ def _write_minute_partition(df: pl.DataFrame, minute_dir) -> int:
         _atomic_write_parquet(day_df, out)
         written += day_df.height
     return written
+
+
+def _resolve_daily_provider(
+    provider_name: str,
+    asset_type: str = "stock",
+) -> tuple[object | None, bool, str | None]:
+    """统一解析 custom daily provider, 把所有 resolver 调用纳入同一异常边界。
+
+    供 sync_and_persist_daily_batch 和 index_sync.sync_and_persist_etf_daily 共用,
+    避免两处分别调 provider_has_dataset / get_provider 时漏掉异常边界。
+
+    返回 (provider, should_fallback_to_tickflow, error_msg):
+      - provider_name == "tickflow" 或未配所需 dataset → (None, True, None)  静默降级
+      - resolver 异常 (registry 损坏 / 插件失效 / provider name 不存在) → (None, True, str(e))
+      - 成功 → (provider, False, None)
+    """
+    if provider_name == "tickflow":
+        return (None, True, None)
+    from app.data_providers import custom as custom_sources
+    try:
+        # ETF 有 "etf" 或 "daily" 任一 dataset 即可 (具体选哪个由 provider.get_daily 决定)
+        if asset_type == "etf":
+            has_dataset = (
+                custom_sources.provider_has_dataset(provider_name, "etf")
+                or custom_sources.provider_has_dataset(provider_name, "daily")
+            )
+        else:
+            has_dataset = custom_sources.provider_has_dataset(provider_name, "daily")
+        if not has_dataset:
+            return (None, True, None)
+        provider = custom_sources.get_provider(provider_name)
+        return (provider, False, None)
+    except Exception as e:  # noqa: BLE001
+        return (None, True, str(e))
+
+
+def _try_custom_daily(
+    symbols: list[str],
+    start_time: datetime | None,
+    end_time: datetime | None,
+    asset_type: str = "stock",
+    on_chunk_done: Callable[[int, int], None] | None = None,
+    on_fallback: Callable[[str], None] | None = None,
+) -> tuple[pl.DataFrame | None, bool]:
+    """尝试从自定义日K源拉取。返回 (df, should_fallback_to_tickflow)。
+
+    返回契约:
+      (None, True)   → 未配自定义源 / 未配 daily dataset / 自定义源异常 → 走 TickFlow
+      (df, False)    → 自定义源成功(含空 df) → 直接用, 不回退
+
+    降级策略: 自定义源异常时无条件 fall through 到 TickFlow,
+    由 TickFlow 路径自身 try/except 兜底。
+
+    asset_type: "stock" / "etf" / "index", 传给 provider.get_daily 供上游区分。
+    on_fallback: 降级到 TickFlow 时回调, 传入降级原因消息 (供前端 job 日志可见)。
+    """
+    provider_name = preferences.get_daily_data_provider()
+    if asset_type == "etf":
+        # ETF 可能独立配置 etf_data_provider
+        etf_provider = preferences.get_etf_data_provider()
+        if etf_provider != "same_as_daily":
+            provider_name = etf_provider
+    provider, fallback, err = _resolve_daily_provider(provider_name, asset_type)
+    if fallback:
+        if err is not None:
+            msg = f"自定义数据源 {provider_name} 解析失败, 回退 TickFlow: {err}"
+            logger.warning("custom daily provider %s resolution failed, falling back to TickFlow: %s",
+                           provider_name, err)
+            if on_fallback:
+                on_fallback(msg)
+        return (None, True)
+
+    try:
+        df = provider.get_daily(
+            symbols, start_time=start_time, end_time=end_time,
+            asset_type=asset_type,
+            on_chunk_done=on_chunk_done,
+        )
+        return (df, False)
+    except Exception as e:  # noqa: BLE001
+        msg = f"自定义数据源 {provider_name} 拉取失败, 回退 TickFlow: {e}"
+        logger.warning("custom daily provider %s call failed, falling back to TickFlow: %s",
+                       provider_name, e)
+        if on_fallback:
+            on_fallback(msg)
+        return (None, True)
 
 
 def _resolve_minute_provider(

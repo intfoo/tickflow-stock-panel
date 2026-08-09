@@ -345,6 +345,7 @@ class MinuteSyncPrefs(BaseModel):
 class DataProvidersIn(BaseModel):
     daily_data_provider: str | None = None
     adj_factor_provider: str | None = None
+    etf_data_provider: str | None = None
     minute_data_provider: str | None = None
     realtime_data_provider: str | None = None
     financial_data_provider: str | None = None
@@ -410,6 +411,7 @@ def get_preferences() -> dict:
         "minute_sync_segment_days": preferences.get_minute_sync_segment_days(),
         "daily_data_provider": preferences.get_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
+        "etf_data_provider": preferences.get_etf_data_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
         "realtime_data_provider": preferences.get_realtime_data_provider(),
         "financial_data_provider": preferences.get_financial_provider(),
@@ -567,6 +569,9 @@ def delete_data_source(name: str) -> dict:
     adj = preferences.get_adj_factor_provider()
     if adj == name:
         updates["adj_factor_provider"] = "same_as_daily"
+    etf = preferences.get_etf_data_provider()
+    if etf == name:
+        updates["etf_data_provider"] = "same_as_daily"
     if updates:
         preferences.save(updates)
     return list_data_sources()
@@ -607,6 +612,7 @@ def update_data_providers(req: DataProvidersIn) -> dict:
     return {
         "daily_data_provider": preferences.get_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
+        "etf_data_provider": preferences.get_etf_data_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
         "realtime_data_provider": preferences.get_realtime_data_provider(),
         "financial_data_provider": preferences.get_financial_provider(),

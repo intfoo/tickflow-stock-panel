@@ -14,6 +14,7 @@ export const STAGE_LABELS: Record<string, string> = {
   compute_enriched: '计算技术指标',
   sync_minute: '同步分钟 K',
   extend_history: '扩展日K历史',
+  extend_history_etf: '扩展ETF历史',
   extend_minute: '扩展分钟K历史',
   rebuild_enriched: '全量计算',
   refresh_views: '刷新视图',

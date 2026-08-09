@@ -184,6 +184,20 @@ export function Data() {
     : new Set<string>()
   // 给定 tierKey, 返回 custom provider 显示名 (走 custom 时) 或 null (走 TickFlow)
   const getCustomProviderName = (tierKey: string): string | null => {
+    // ETF 可能独立配置 etf_data_provider, 解析 same_as_daily → 跟随 daily
+    if (tierKey === 'etf') {
+      const etfPref = prefs.data?.etf_data_provider
+      const etfActive = (!etfPref || etfPref === 'same_as_daily') ? activeProvider : etfPref
+      if (etfActive === 'tickflow') return null
+      const ds = TIERKEY_TO_DATASET[tierKey] // 'daily'
+      const customDatasets = etfActive !== activeProvider
+        ? new Set(dataSources.data?.custom?.find(s => s.name === etfActive)?.datasets || [])
+        : activeCustomDatasets
+      if (ds && customDatasets.has(ds)) {
+        return dataSources.data?.custom?.find(s => s.name === etfActive)?.display_name || etfActive
+      }
+      return null
+    }
     if (activeProvider === 'tickflow') return null
     const ds = TIERKEY_TO_DATASET[tierKey]
     if (ds && activeCustomDatasets.has(ds)) return activeDataSourceName
@@ -317,6 +331,7 @@ export function Data() {
     sync_instruments: 'instruments',
     sync_daily: 'daily',
     extend_history: 'daily',
+    extend_history_etf: 'etf_daily',
     sync_adj: 'adj_factor',
     compute_enriched: 'enriched',
     rebuild_enriched: 'enriched',
@@ -477,6 +492,10 @@ export function Data() {
             hint="场内基金 · 独立存储"
             stats={etfOverviewStats}
             loading={isLoading}
+            active={activeCard === 'etf_daily'}
+            done={doneStages.has('etf_daily')}
+            skipped={skippedCards.has('etf_daily')}
+            stagePct={activeCard === 'etf_daily' ? (job.data?.stage_pct ?? 0) : 0}
             tierKey="etf"
             capLimits={caps.data?.capabilities}
             tierLabel={caps.data?.label}
@@ -489,6 +508,8 @@ export function Data() {
               { label: '指标', table: 'etf_enriched' },
             ] as FieldTab[]}
             onShowFields={(t) => setSchemaTable(t ?? 'etf_daily')}
+            onSettings={hasData ? () => setOpenSettings(v => v === 'etf' ? null : 'etf') : undefined}
+            settingsOpen={openSettings === 'etf'}
           />
         )
       case 'minute':
@@ -941,6 +962,20 @@ export function Data() {
               caps={caps.data}
               isRunning={!!activeJobId}
               earliestDate={s?.daily?.earliest_date ?? null}
+              onStart={() => setOpenSettings(null)}
+            />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'etf' && (
+          <SettingsModal title="ETF · 向前扩展历史" onClose={() => setOpenSettings(null)}>
+            <ExtendHistoryPanel
+              assetType="etf"
+              caps={caps.data}
+              isRunning={!!activeJobId}
+              earliestDate={s?.etf_daily?.earliest_date ?? s?.etf_enriched?.earliest_date ?? null}
               onStart={() => setOpenSettings(null)}
             />
           </SettingsModal>
