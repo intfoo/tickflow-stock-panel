@@ -1,0 +1,87 @@
+name: Build and Deploy (dev-main)
+
+# fork 私有 workflow: 仅存在于 dev-main 分支, 上游没有此文件, 同步上游永不冲突。
+# 上游的 docker.yml 保持逐字节一致, 请勿在其中加 fork 私货。
+#
+# 触发:
+#   - push 到 dev-main: 一次 push 推多个 commit 只触发一次, checkout 最终 HEAD
+#     (远端 ref 更新是原子的, 不存在"前一个提交中间触发"的问题)
+#   - 手动: 网页 Actions → Run workflow
+#
+# concurrency: 若上一次 push 的 run 还在跑时又来了新 push, 自动取消旧 run,
+# 避免并行构建/部署过期代码。
+on:
+  push:
+    branches: [dev-main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev-main
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # dev-main 产物用 dev 标签族, 不污染 main 维护的 :latest
+          tags: |
+            type=raw,value=dev
+            type=sha,prefix=dev-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          # GitHub runner 在海外, 关掉国内镜像源(USE_CN_MIRROR=0)
+          build-args: |
+            USE_CN_MIRROR=0
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ==========  SSH 部署到服务器 ==========
+      # 未配置 SERVER_HOST 变量时自动跳过 (fork/本地开发不会整 workflow 飘红)。
+      # 启用方式: 仓库 Settings → Secrets and variables → Actions:
+      #   Variables: SERVER_HOST;  Secrets: SSH_KEY
+      - name: Deploy to Server
+        if: ${{ vars.SERVER_HOST != '' }}
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ vars.SERVER_HOST }}
+          username: deployer
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            bash /usr/local/bin/deploy.sh ${{ github.event.repository.name }}
