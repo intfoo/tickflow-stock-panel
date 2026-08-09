@@ -993,6 +993,7 @@ async def extend_history(request: Request):
         body = await request.json()
         value = body.get("value")
         unit = body.get("unit", "month")
+        asset_type = body.get("asset_type", "stock")
         if not value or value <= 0:
             raise HTTPException(status_code=400, detail="value 必须为正整数")
         if unit not in ("day", "month", "year"):
@@ -1028,7 +1029,7 @@ async def extend_history(request: Request):
                 job_store.start(job_id)
                 result = await loop.run_in_executor(
                     _long_task_executor,
-                    lambda: run_extend_history(repo, capset, value, unit, on_progress=progress),
+                    lambda: run_extend_history(repo, capset, value, unit, on_progress=progress, asset_type=asset_type),
                 )
                 if "error" in result:
                     job_store.fail(job_id, result["error"])

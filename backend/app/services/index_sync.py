@@ -293,13 +293,11 @@ def sync_and_persist_etf_daily(
     end_date: datetime | None = None,
     symbols_override: list[str] | None = None,
     on_chunk_done: Callable[[int, int], None] | None = None,
+    on_fallback: Callable[[str], None] | None = None,
 ) -> int:
     """同步 ETF 日K到独立 kline_etf_* parquet,并计算 ETF enriched。
     on_chunk_done(current, total) 每个批次完成后回调。
     """
-    if not capset.has(Cap.KLINE_DAILY_BATCH):
-        return 0
-
     if symbols_override:
         symbols = sorted(set(s for s in symbols_override if s))
     else:
@@ -311,6 +309,38 @@ def sync_and_persist_etf_daily(
             return 0
         symbols = sorted(set(instruments["symbol"].to_list()))
     if not symbols:
+        return 0
+
+    # 自定义源分流（统一路由）
+    end_time_custom = end_date or datetime.now()
+    start_time_custom = start_date or (end_time_custom - timedelta(days=365))
+    df_custom, fallback = kline_sync._try_custom_daily(
+        symbols, start_time=start_time_custom, end_time=end_time_custom,
+        asset_type="etf", on_chunk_done=on_chunk_done, on_fallback=on_fallback,
+    )
+    if not fallback:
+        if df_custom is None or df_custom.is_empty():
+            return 0
+        repo.append_etf_daily(df_custom)
+        factors = _load_etf_factors(repo)
+        # 分 chunk 计算 enriched, 对齐 TickFlow 路径的逐 chunk 模式 (避免全量 OOM)
+        enriched_parts: list[pl.DataFrame] = []
+        for chunk_symbols in chunked(symbols, 100):
+            chunk_df = df_custom.filter(pl.col("symbol").is_in(chunk_symbols))
+            if chunk_df.is_empty():
+                continue
+            batch_factors = factors.filter(pl.col("symbol").is_in(chunk_symbols)) if not factors.is_empty() else factors
+            enriched_parts.append(compute_enriched(chunk_df, factors=batch_factors, instruments=None))
+            del chunk_df, batch_factors
+            gc.collect()
+        if enriched_parts:
+            enriched = pl.concat(enriched_parts, how="diagonal_relaxed")
+            repo.append_etf_enriched(enriched)
+        repo.refresh_index_views()
+        return df_custom.height
+    # 自定义源未配 / 异常 → fall through 到 TickFlow
+
+    if not capset.has(Cap.KLINE_DAILY_BATCH):
         return 0
 
     limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH)

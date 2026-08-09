@@ -208,6 +208,30 @@ def get_adj_factor_provider() -> str:
     return provider if provider in _allowed_data_providers() else "same_as_daily"
 
 
+def get_etf_data_provider() -> str:
+    """ETF 日K数据源。默认 same_as_daily 表示跟随 daily_data_provider。
+
+    - "same_as_daily"：跟随 get_daily_data_provider()（默认行为，向后兼容）
+    - "tickflow"：走 TickFlow
+    - 其他：走自定义源
+    """
+    provider = str(load().get("etf_data_provider", "same_as_daily") or "same_as_daily").lower()
+    if provider == "same_as_daily":
+        return provider
+    return provider if provider in _allowed_data_providers() else "same_as_daily"
+
+
+def get_etf_data_provider_resolved() -> str:
+    """ETF 实际使用的数据源名（解析 same_as_daily → daily_data_provider）。
+
+    供需要"真实 provider 名"的调用方使用（如复权源选择、能力判断）。
+    """
+    etf_provider = get_etf_data_provider()
+    if etf_provider == "same_as_daily":
+        return get_daily_data_provider()
+    return etf_provider
+
+
 def get_minute_data_provider() -> str:
     provider = str(load().get("minute_data_provider", "tickflow") or "tickflow").lower()
     return provider if provider in _allowed_data_providers() else "tickflow"

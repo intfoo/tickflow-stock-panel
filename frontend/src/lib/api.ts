@@ -966,6 +966,7 @@ export interface Preferences {
   minute_sync_segment_days: number
   daily_data_provider?: string
   adj_factor_provider?: string
+  etf_data_provider?: string
   minute_data_provider?: string
   realtime_data_provider?: string
   financial_data_provider?: string
@@ -1121,8 +1122,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ provider, dataset, symbols, config }),
     }),
-  updateDataProviders: (cfg: Partial<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider' | 'financial_data_provider'>>) =>
-    request<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider'>>(
+  updateDataProviders: (cfg: Partial<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'etf_data_provider' | 'minute_data_provider' | 'realtime_data_provider' | 'financial_data_provider'>>) =>
+    request<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'etf_data_provider' | 'minute_data_provider' | 'realtime_data_provider'>>(
       '/api/settings/preferences/data-providers',
       { method: 'PUT', body: JSON.stringify(cfg) },
     ),
@@ -1456,10 +1457,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ confirm: true }),
     }),
-  extendHistory: (value: number, unit: 'day' | 'month' | 'year') =>
+  extendHistory: (value: number, unit: 'day' | 'month' | 'year', assetType: 'stock' | 'etf' = 'stock') =>
     request<{ status: string; job_id: string }>('/api/kline/extend_history', {
       method: 'POST',
-      body: JSON.stringify({ value, unit }),
+      body: JSON.stringify({ value, unit, asset_type: assetType }),
     }),
   repairDaily: (startDate: string) =>
     request<{ status: string; job_id: string }>('/api/kline/repair_daily', {

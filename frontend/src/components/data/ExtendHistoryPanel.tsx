@@ -4,7 +4,8 @@ import { Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
-export function ExtendHistoryPanel({ caps, isRunning, earliestDate, onStart }: {
+export function ExtendHistoryPanel({ assetType = 'stock', caps, isRunning, earliestDate, onStart }: {
+  assetType?: 'stock' | 'etf'
   caps: { label: string; capabilities: Record<string, { rpm: number | null; batch: number | null; subscribe: number | null }> } | undefined
   isRunning: boolean
   earliestDate: string | null
@@ -16,7 +17,7 @@ export function ExtendHistoryPanel({ caps, isRunning, earliestDate, onStart }: {
   const hasBatchCap = !!caps?.capabilities?.['kline.daily.batch']
 
   const extend = useMutation({
-    mutationFn: () => api.extendHistory(value, unit),
+    mutationFn: () => api.extendHistory(value, unit, assetType),
     onSuccess: () => {
       onStart()
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
@@ -34,7 +35,9 @@ export function ExtendHistoryPanel({ caps, isRunning, earliestDate, onStart }: {
 
   return (
     <div className="px-4 pb-4 pt-3 border-t border-accent/20 space-y-3">
-      <div className="text-[10px] text-secondary">向前扩展历史数据</div>
+      <div className="text-[10px] text-secondary">
+        {assetType === 'etf' ? 'ETF 向前扩展历史数据' : '向前扩展历史数据'}
+      </div>
 
       <div className="flex items-center gap-2">
         <div className="flex items-center">

@@ -1744,6 +1744,20 @@ class KlineRepository:
             return None
         return None
 
+    def earliest_etf_daily_date(self) -> date | None:
+        """本地 ETF 日K数据的最早日期。"""
+        try:
+            with self._lock:
+                res = self.db.execute(
+                    "SELECT min(date) FROM kline_etf_daily",
+                ).fetchone()
+            if res and res[0]:
+                d = res[0]
+                return d if isinstance(d, date) else date.fromisoformat(str(d))
+        except Exception:
+            return None
+        return None
+
     def earliest_minute_date(self) -> date | None:
         """本地分钟K数据的最早日期。"""
         try:
@@ -2004,10 +2018,44 @@ class KlineRepository:
         直接 write_parquet(out) 在进程被 kill (dev.sh 清端口用 kill -9)
         或断电时会留下半截文件, 之后 scan_parquet glob 整条链路报错。
         临时文件后缀 .tmp 不匹配 *.parquet glob, 不会被扫描误读。
+
+        Windows 上 tmp.replace(out) 可能因 DuckDB 视图 scan_parquet 或
+        polars read_parquet 的 mmap 句柄未及时释放而抛 PermissionError [WinError 5]。
+        重试若干次 (带短暂 sleep) 等待句柄释放; 仍失败则显式 gc 后再试一次。
         """
+        import gc
+        import os
+        import time
+
         tmp = out.with_name(out.name + ".tmp")
         df.write_parquet(tmp)
-        tmp.replace(out)  # 同目录 rename, POSIX/NTFS 均为原子操作
+        last_err: Exception | None = None
+        for attempt in range(5):
+            try:
+                tmp.replace(out)  # 同目录 rename, POSIX/NTFS 均为原子操作
+                return
+            except PermissionError as e:
+                last_err = e
+                # Windows: 可能是 DuckDB/polars mmap 句柄未释放, 短暂等待后重试
+                gc.collect()
+                time.sleep(0.1 * (attempt + 1))
+            except OSError as e:
+                last_err = e
+                time.sleep(0.1 * (attempt + 1))
+        # 最后一次尝试: 显式 gc 后直接 os.replace
+        gc.collect()
+        try:
+            os.replace(tmp, out)
+            return
+        except (PermissionError, OSError) as e:
+            # 仍然失败: 删 tmp 避免残留, 抛出带上下文的错误
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise PermissionError(
+                f"原子写 parquet 失败 (目标可能被占用): {out} -> {e}"
+            ) from last_err
 
     def _write_daily_partition(self, df: pl.DataFrame, table: str) -> None:
         """按 date 分区写入 parquet，每个日期一个文件，支持 merge-upsert。"""
