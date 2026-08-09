@@ -158,7 +158,9 @@ export function SweepParamList({ params, sweeps, updateSweep }: {
               )}
               {s.enabled && !numeric && (
                 <div className="mt-1 text-[11px] text-secondary">
-                  {p.type === 'bool' ? '扫描 [是 / 否]' : `扫描全部选项 (${p.options?.length ?? 0})`}
+                  {p.type === 'bool'
+                    ? '扫描 [是 / 否]'
+                    : `扫描全部选项 (${p.options?.length ?? 0}): ${(p.options ?? []).join(' / ')}`}
                 </div>
               )}
             </div>

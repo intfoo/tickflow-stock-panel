@@ -269,6 +269,22 @@ def build_matrix_cache_profile(
         "float_cap_min": 0.0,
         "exclude_st": True,
     }
+    # 股本类过滤键依赖 total_shares/float_shares, 仅 stock instruments 具备这两列;
+    # ETF/指数必须强制为 None, 否则 _resolve_matrix_storage_fields 报
+    # "matrix parquet fields unavailable" (写 0.0 也会按 is not None 判定为依赖)。
+    shares_filter_keys = (
+        "turnover_min",
+        "turnover_max",
+        "market_cap_min",
+        "market_cap_max",
+        "float_cap_min",
+        "float_cap_max",
+    )
+    if asset_type != "stock":
+        common_filter = {
+            key: (None if key in shares_filter_keys else value)
+            for key, value in common_filter.items()
+        }
     definitions = (
         strategy_engine.strategy_definitions()
         if hasattr(strategy_engine, "strategy_definitions")
@@ -287,10 +303,16 @@ def build_matrix_cache_profile(
                 continue
             if item.get("type") in {"int", "float"} and item.get("max") is not None:
                 params[str(item["id"])] = item["max"]
+        basic_filter = {**dict(strategy.basic_filter or {}), **common_filter}
+        if asset_type != "stock":
+            # 策略自身 basic_filter 可能从 DEFAULT_BASIC_FILTER 继承市值/换手阈值
+            # (如 market_cap_min=10e8), 对无股本数据的资产类型一并中和。
+            for key in shares_filter_keys:
+                basic_filter[key] = None
         plans.append(resolver.resolve(
             strategy,
             params=params,
-            basic_filter={**dict(strategy.basic_filter or {}), **common_filter},
+            basic_filter=basic_filter,
             entry_signals=strategy.entry_signals,
             exit_signals=strategy.exit_signals,
             overrides={},
@@ -306,6 +328,13 @@ def build_matrix_cache_profile(
         | set(merged.instrument_columns)
         | set(merged.matrix_columns)
     )
+    if asset_type != "stock":
+        # ETF/指数 parquet 与 instruments 均无股本数据: 剔除依赖 total_shares/
+        # float_shares 的字段 (含评分/必备字段间接引入的 turnover_rate), 否则缓存
+        # 构建在换手率矩阵填充处报 "matrix turnover_rate requires float_shares"。
+        fields = frozenset(
+            fields - {"total_shares", "float_shares", "turnover_rate"}
+        )
     generation_payload = json.dumps(
         {
             "asset_type": asset_type,

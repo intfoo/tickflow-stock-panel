@@ -1428,6 +1428,22 @@ export function StrategyBacktest() {
             </div>
           )}
           <div className="overflow-hidden rounded-input border border-border bg-surface">
+            {/* 资产类型开关: 页面级, 决定下方策略列表/标的池, 不依赖先选中策略 */}
+            <div className="flex border-b border-border/60 bg-base/30 p-0.5">
+              {(['stock', 'etf'] as const).map(t => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => { setAssetType(t); setSelectedStrategy(null); setSymbols('') }}
+                  className={`flex-1 rounded-[6px] px-1.5 py-1 text-[10px] font-medium transition-colors ${assetType === t
+                    ? 'bg-accent/15 text-accent shadow-sm'
+                    : 'text-muted hover:bg-elevated/70 hover:text-secondary'
+                  }`}
+                >
+                  {t === 'stock' ? '股票' : 'ETF'}
+                </button>
+              ))}
+            </div>
             <div className="flex border-b border-border/60 bg-base/30 p-0.5">
               {STRATEGY_GROUPS.map(group => (
                 <button

@@ -680,6 +680,21 @@ def test_registered_builtin_matrix_strategies_share_one_cache_profile():
     assert {"open", "high", "low", "close", "volume"}.issubset(profile.field_columns)
 
 
+def test_etf_cache_profile_excludes_shares_fields():
+    """ETF instruments 无 total_shares/float_shares; 股本类过滤键必须中和为 None,
+    否则 _resolve_matrix_storage_fields 报 matrix parquet fields unavailable。"""
+    engine = StrategyEngine(
+        strategy_dirs=[REPO_ROOT / "backend" / "app" / "strategy" / "builtin"]
+    )
+    profile = build_matrix_cache_profile(engine, "etf")
+
+    assert profile.warmup_bars > 0
+    assert "total_shares" not in profile.field_columns
+    assert "float_shares" not in profile.field_columns
+    assert "turnover_rate" not in profile.field_columns
+    assert {"open", "high", "low", "close", "volume"}.issubset(profile.field_columns)
+
+
 def test_chunked_matrix_score_matches_previous_full_matrix_formula():
     row_count = 4
     asset_count = 600

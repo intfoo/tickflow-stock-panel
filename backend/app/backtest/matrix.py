@@ -710,8 +710,14 @@ def load_market_data_matrix_from_parquet(
         pa.schema([("date", pa.date32())]),
         flavor="hive",
     )
+    # 显式 *.parquet 文件列表而非目录: pyarrow dataset 按目录打开会读取所有非
+    # dot/下划线前缀的文件, 同步中断残留的 part.parquet.tmp 会被一并读入,
+    # 造成同一 date/symbol 行重复 (曾致 _scan_matrix_values 报 unique 错误)。
+    dataset_files = sorted(str(p) for p in root.rglob("*.parquet"))
+    if not dataset_files:
+        raise ValueError("matrix parquet range contains no market data")
     dataset = pads.dataset(
-        str(root),
+        dataset_files,
         format="parquet",
         partitioning=partitioning,
     )

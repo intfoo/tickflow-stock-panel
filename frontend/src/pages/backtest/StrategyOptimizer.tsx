@@ -64,6 +64,8 @@ export function StrategyOptimizer() {
       start,
       end,
       mode,
+      // 资产类型跟随策略声明 (ETF 策略必须 etf, 否则后端 validate_context 拒绝)
+      asset_type: sweep.selected?.asset_types?.[0],
     })
   }
 

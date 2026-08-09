@@ -65,6 +65,7 @@ export interface StartWalkForwardParams {
   start?: string | null
   end?: string | null
   mode?: 'position' | 'full'
+  asset_type?: string
 }
 
 let current: WalkForwardTask | null = null
@@ -223,6 +224,7 @@ export function startWalkForward(params: StartWalkForwardParams): void {
     start: params.start ?? undefined,
     end: params.end ?? undefined,
     mode: params.mode,
+    asset_type: params.asset_type,
   })
 
   localStorage.setItem(RECONNECT_KEY, qs)
