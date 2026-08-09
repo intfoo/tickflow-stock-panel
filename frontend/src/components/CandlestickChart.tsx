@@ -28,10 +28,6 @@ export function fmtBigNum(v: number): string {
 // 序列颜色 (双主题通用); 画布文字/网格/边框主题相关色走 ChartTheme
 const THEME = {
   background: 'transparent',
-  bull: '#F04438',
-  bear: '#12B76A',
-  volBull: 'rgba(240,68,56,0.4)',
-  volBear: 'rgba(18,183,106,0.4)',
 }
 
 interface Props {
@@ -56,7 +52,26 @@ export function CandlestickChart({ data, height = 480 }: Props) {
       rightPriceScale: { borderColor: ct.border },
       timeScale: { borderColor: ct.border },
     })
-  }, [ct])
+    // 涨跌色随 colorMode 变化, applyOptions 即时更新蜡烛颜色
+    candleRef.current?.applyOptions({
+      upColor: ct.bull,
+      downColor: ct.bear,
+      borderUpColor: ct.bull,
+      borderDownColor: ct.bear,
+      wickUpColor: ct.bull,
+      wickDownColor: ct.bear,
+    })
+    // 成交量颜色需重新 setData 更新
+    if (volRef.current && data.length > 0) {
+      volRef.current.setData(
+        data.map(d => ({
+          time: d.date as any,
+          value: d.volume ?? 0,
+          color: d.close >= d.open ? ct.bullAlpha(0.4) : ct.bearAlpha(0.4),
+        })) as HistogramData[],
+      )
+    }
+  }, [ct, data])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -90,12 +105,12 @@ export function CandlestickChart({ data, height = 480 }: Props) {
 
     // Candlestick — occupies top 80% via default price scale
     const candle = chart.addCandlestickSeries({
-      upColor: THEME.bull,
-      downColor: THEME.bear,
-      borderUpColor: THEME.bull,
-      borderDownColor: THEME.bear,
-      wickUpColor: THEME.bull,
-      wickDownColor: THEME.bear,
+      upColor: ctRef.current.bull,
+      downColor: ctRef.current.bear,
+      borderUpColor: ctRef.current.bull,
+      borderDownColor: ctRef.current.bear,
+      wickUpColor: ctRef.current.bull,
+      wickDownColor: ctRef.current.bear,
       lastValueVisible: false,
       priceLineVisible: false,
     })
@@ -146,7 +161,7 @@ export function CandlestickChart({ data, height = 480 }: Props) {
       data.map(d => ({
         time: d.date as any,
         value: d.volume ?? 0,
-        color: d.close >= d.open ? THEME.volBull : THEME.volBear,
+        color: d.close >= d.open ? ctRef.current.bullAlpha(0.4) : ctRef.current.bearAlpha(0.4),
       })) as HistogramData[],
     )
 

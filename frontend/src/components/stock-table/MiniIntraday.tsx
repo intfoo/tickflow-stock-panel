@@ -10,6 +10,7 @@
 */
 import { useId } from 'react'
 import type { MinuteKlineRow } from '@/lib/api'
+import { useChartTheme } from '@/lib/theme'
 
 export function MiniIntraday({ rows, prevClose, changePct, width = 100, height = 56 }: {
   rows: MinuteKlineRow[]
@@ -20,13 +21,13 @@ export function MiniIntraday({ rows, prevClose, changePct, width = 100, height =
   width?: number
   height?: number
 }) {
+  const ct = useChartTheme()
+
   // 空数据：返回等尺寸占位
   if (!rows || rows.length < 2) {
     return <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="block" aria-label="暂无分时" />
   }
 
-  const BULL = '#C74040'
-  const BEAR = '#2D9B65'
   const LINE_PREV_CLOSE = '#7A7A85'   // 昨收基准线: 深灰实线
   const LINE_AVG = '#E0B84A'          // 均线: 暖黄
 
@@ -44,7 +45,7 @@ export function MiniIntraday({ rows, prevClose, changePct, width = 100, height =
     : prevClose != null && prevClose > 0
       ? lastClose >= prevClose
       : lastClose >= firstOpen
-  const color = isUp ? BULL : BEAR
+  const color = isUp ? ct.bull : ct.bear
 
   // 昨收基准线: 优先用 prevClose; 其次用 changePct 反算 (close/(1+changePct));
   // 最后回退到第一根 open

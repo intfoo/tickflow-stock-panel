@@ -7,6 +7,7 @@
 //   - UI token (bg-surface/text-foreground 等) 自动跟随;
 //     图表画布不吃 CSS 变量, 统一走 useChartTheme() 取调色板
 import { useEffect, useState } from 'react'
+import { getColorMode, useColorMode, type ColorMode, COLOR_MODES } from './colorMode'
 
 const KEY = 'tf-theme'
 const EVENT = 'tf-theme-change'
@@ -54,6 +55,19 @@ export function useTheme(): Theme {
 // bull/bear/accent 等语义色双主题一致, 不在此重复定义。
 // ================================================================
 
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace('#', '')
+  const r = parseInt(h.slice(0, 2), 16)
+  const g = parseInt(h.slice(2, 4), 16)
+  const b = parseInt(h.slice(4, 6), 16)
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
+function presetColors(mode: ColorMode): { bull: string; bear: string } {
+  const p = COLOR_MODES.find(m => m.id === mode) ?? COLOR_MODES[0]
+  return { bull: p.bullHex, bear: p.bearHex }
+}
+
 export interface ChartTheme {
   /** 轴刻度/图例等常规文字 */
   text: string
@@ -79,9 +93,19 @@ export interface ChartTheme {
   zoomFill: string
   /** 分时图均价线以外的弱填充 */
   fillSubtle: string
+  /** 涨色 hex（画布用） */
+  bull: string
+  /** 跌色 hex（画布用） */
+  bear: string
+  /** 涨色半透明 rgba（alpha 0-1） */
+  bullAlpha: (alpha: number) => string
+  /** 跌色半透明 rgba（alpha 0-1） */
+  bearAlpha: (alpha: number) => string
 }
 
-const DARK: ChartTheme = {
+function darkTheme(cm: ColorMode): ChartTheme {
+  const c = presetColors(cm)
+  return {
   text: '#A1A1AA',
   textStrong: '#E4E4E7',
   grid: 'rgba(255,255,255,0.06)',
@@ -94,9 +118,16 @@ const DARK: ChartTheme = {
   infoBarBg: 'rgba(39,39,42,0.6)',
   zoomFill: 'rgba(255,255,255,0.06)',
   fillSubtle: 'rgba(255,255,255,0.04)',
+    bull: c.bull,
+    bear: c.bear,
+    bullAlpha: (a: number) => hexToRgba(c.bull, a),
+    bearAlpha: (a: number) => hexToRgba(c.bear, a),
+  }
 }
 
-const LIGHT: ChartTheme = {
+function lightTheme(cm: ColorMode): ChartTheme {
+  const c = presetColors(cm)
+  return {
   text: '#71717A',
   textStrong: '#27272A',
   grid: 'rgba(0,0,0,0.06)',
@@ -109,13 +140,18 @@ const LIGHT: ChartTheme = {
   infoBarBg: 'rgba(244,244,245,0.85)',
   zoomFill: 'rgba(0,0,0,0.06)',
   fillSubtle: 'rgba(0,0,0,0.04)',
+    bull: c.bull,
+    bear: c.bear,
+    bullAlpha: (a: number) => hexToRgba(c.bull, a),
+    bearAlpha: (a: number) => hexToRgba(c.bear, a),
+  }
 }
 
-export function chartTheme(theme: Theme): ChartTheme {
-  return theme === 'dark' ? DARK : LIGHT
+export function chartTheme(theme: Theme, colorMode: ColorMode = getColorMode()): ChartTheme {
+  return theme === 'dark' ? darkTheme(colorMode) : lightTheme(colorMode)
 }
 
 /** hook: 当前主题的图表调色板 (主题切换自动触发重渲染)。 */
 export function useChartTheme(): ChartTheme {
-  return chartTheme(useTheme())
+  return chartTheme(useTheme(), useColorMode())
 }

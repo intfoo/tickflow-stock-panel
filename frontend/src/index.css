@@ -77,3 +77,28 @@ body {
   -moz-osx-font-smoothing: auto;
   text-rendering: optimizeLegibility;
 }
+
+/* === 涨跌配色模式覆盖 ===
+ * 通过 <html data-color-mode="xxx"> 属性选择器覆盖 --bull/--bear
+ * classic 模式不覆盖（用 :root / html.dark 的默认值）
+ *
+ * 注意特异性：html.dark 的特异性是 (0,1,1)，纯 [data-color-mode] 只有 (0,1,0)，
+ * 暗色模式下会被 html.dark 盖住导致不生效。用 html[data-color-mode] 提升到 (0,1,1)，
+ * 与 html.dark 同级，但属性选择器写在后面，后者优先，覆盖生效。
+ */
+html[data-color-mode="green-red"] {
+  --bull: 152 67% 45%;
+  --bear: 4 87% 60%;
+}
+html[data-color-mode="warm-cool"] {
+  --bull: 34 94% 50%;
+  --bear: 215 16% 47%;
+}
+html[data-color-mode="mono-blue"] {
+  --bull: 226 71% 40%;
+  --bear: 215 20% 65%;
+}
+html[data-color-mode="mono-grey"] {
+  --bull: 240 5% 34%;
+  --bear: 240 5% 65%;
+}

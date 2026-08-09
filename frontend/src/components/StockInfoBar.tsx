@@ -4,9 +4,7 @@ import type { KlineRow, FinancialMetricRecord } from '@/lib/api'
 import { fmtPrice, fmtBigNum, fmtVolume } from '@/lib/format'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { INFO_GROUPS, type ColumnConfig } from '@/lib/stock-info-fields'
-
-const BULL = '#C74040'
-const BEAR = '#2D9B65'
+import { useChartTheme } from '@/lib/theme'
 
 interface Props {
   symbol: string
@@ -92,6 +90,7 @@ function renderExtInline(
 }
 
 export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsChange, financialMetrics, onMonitor, inWatchlist, onToggleWatchlist }: Props) {
+  const ct = useChartTheme()
   // 弹窗开关：纯本地状态，与数据/配置无关，放早期 return 之前
   const [customizerOpen, setCustomizerOpen] = useState(false)
   // ext 标签展开状态：按 symbol::colId，切股/切字段时互不干扰
@@ -114,7 +113,7 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
   const chg = prev ? close - Number(prev.close) : 0
   const chgPct = prev ? chg / Number(prev.close) * 100 : 0
   const isUp = chg >= 0
-  const clr = isUp ? BULL : BEAR
+  const clr = isUp ? ct.bull : ct.bear
 
   const totalShares = stockInfo?.total_shares
   const floatShares = stockInfo?.float_shares

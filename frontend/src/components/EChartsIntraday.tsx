@@ -11,8 +11,6 @@ const THEME = {
   line: '#3B82F6',
   areaFill: 'rgba(59,130,246,0.40)',
   avgLine: '#F59E0B',
-  volUp: 'rgba(240,68,56,0.6)',
-  volDown: 'rgba(18,183,106,0.6)',
 }
 
 interface Props {
@@ -122,7 +120,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
       volumes[idx] = {
         value: data[i].volume,
         itemStyle: {
-          color: data[i].close > data[i].open ? THEME.volUp : data[i].close < data[i].open ? THEME.volDown : volNeutral,
+          color: data[i].close > data[i].open ? ct.bullAlpha(0.6) : data[i].close < data[i].open ? ct.bearAlpha(0.6) : volNeutral,
         },
       }
     }
@@ -175,13 +173,13 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
       markLineData.push(
         {
           yAxis: limitUp,
-          lineStyle: { color: 'rgba(199,64,64,0.4)', type: 'dashed', width: 1 },
+          lineStyle: { color: ct.bullAlpha(0.4), type: 'dashed', width: 1 },
           label: { show: false },
           symbol: 'none',
         },
         {
           yAxis: limitDown,
-          lineStyle: { color: 'rgba(45,155,101,0.4)', type: 'dashed', width: 1 },
+          lineStyle: { color: ct.bearAlpha(0.4), type: 'dashed', width: 1 },
           label: { show: false },
           symbol: 'none',
         },
@@ -420,8 +418,8 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
   const lastClose = data.length > 0 ? data[data.length - 1].close : null
   const lineIsUp = lastClose != null && prevClose != null ? lastClose > prevClose : true
   const lineIsFlat = lastClose != null && prevClose != null ? lastClose === prevClose : false
-  const lineColor = lineIsFlat ? '#A1A1AA' : lineIsUp ? '#C74040' : '#2D9B65'
-  const areaFill = lineIsFlat ? 'rgba(180,180,190,0.40)' : lineIsUp ? 'rgba(199,64,64,0.40)' : 'rgba(34,197,94,0.40)'
+  const lineColor = lineIsFlat ? '#A1A1AA' : lineIsUp ? ct.bull : ct.bear
+  const areaFill = lineIsFlat ? 'rgba(180,180,190,0.40)' : lineIsUp ? ct.bullAlpha(0.4) : ct.bearAlpha(0.4)
 
   useEffect(() => {
     setInfoIdx(data.length - 1)
@@ -512,7 +510,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
   const chg = d && prevClose != null ? d.close - prevClose : null
   const isUp = chg != null ? chg > 0 : true
   const isFlat = chg != null ? chg === 0 : false
-  const priceClr = isFlat ? '#A1A1AA' : isUp ? '#C74040' : '#2D9B65'
+  const priceClr = isFlat ? '#A1A1AA' : isUp ? ct.bull : ct.bear
 
   return (
     <div className="w-full">

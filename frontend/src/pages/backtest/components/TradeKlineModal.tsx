@@ -6,6 +6,7 @@ import type { ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick
 import type { StrategyBacktestTrade } from '@/lib/api'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
+import { useChartTheme } from '@/lib/theme'
 
 interface Props {
   trade: StrategyBacktestTrade | null
@@ -34,6 +35,7 @@ function fmtSignedMoney(v: number | null | undefined): string {
 }
 
 export function TradeKlineModal({ trade, onClose }: Props) {
+  const ct = useChartTheme()
   const [showIntraday, setShowIntraday] = useState(false)
   const backdrop = useDialogBackdrop(onClose)
 
@@ -76,19 +78,19 @@ export function TradeKlineModal({ trade, onClose }: Props) {
       {
         value: Number(trade.entry_price),
         label: `买入价 ${fmtPrice(trade.entry_price)}`,
-        color: '#C74040',
+        color: ct.bull,
         start,
         end,
       },
       {
         value: Number(trade.exit_price),
         label: `卖出价 ${fmtPrice(trade.exit_price)}`,
-        color: '#2D9B65',
+        color: ct.bear,
         start,
         end,
       },
     ]
-  }, [trade])
+  }, [trade, ct])
 
   return (
     <AnimatePresence>

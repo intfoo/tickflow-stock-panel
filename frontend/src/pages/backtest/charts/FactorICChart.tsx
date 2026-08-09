@@ -65,8 +65,8 @@ export function FactorICChart({ result }: Props) {
             value: v,
             itemStyle: {
               color: v >= 0
-                ? 'rgba(240,68,56,0.6)'
-                : 'rgba(18,183,106,0.6)',
+                ? ct.bullAlpha(0.6)
+                : ct.bearAlpha(0.6),
             },
           })),
           barMaxWidth: 6,
