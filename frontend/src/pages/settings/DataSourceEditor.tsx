@@ -259,37 +259,12 @@ export function DataSourceEditor({
             <div className="pt-2 border-t border-border/30 space-y-1.5">
               <div className="text-[10px] uppercase tracking-widest text-muted">数据集</div>
 
-              {/* 日K分组 */}
-              <div className="text-xs text-muted/70 px-2.5 pt-1 pl-1 border-l-2 border-border/40">日K</div>
-              {(['daily', 'etf'] as DatasetKey[]).map(key => {
+              {/* 数据集列表（平级，样式统一） */}
+              {(['daily', 'etf', 'adj_factor', 'realtime', 'minute'] as DatasetKey[]).map(key => {
                 const enabled = !!config.datasets[key]
-                const label = key === 'daily' ? '股票日K' : 'ETF日K'
+                const label = key === 'daily' ? '股票日K' : key === 'etf' ? 'ETF日K' : DATASET_LABEL[key]
                 // 股票关闭 → 回退 TickFlow；ETF 关闭 → 跟随股票日K
-                const hint = enabled
-                  ? '已配置'
-                  : (key === 'daily' ? '回退 TF' : '跟随日K')
-                return (
-                  <button
-                    key={key}
-                    onClick={() => setActiveTab(key)}
-                    className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-btn text-xs transition-colors ml-4 ${
-                      activeTab === key ? 'bg-elevated text-foreground' : 'text-secondary hover:bg-elevated/50'
-                    }`}
-                  >
-                    <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${enabled ? 'bg-accent' : 'bg-muted/30'}`} />
-                    <span className="flex-1 text-left">{label}</span>
-                    <span className="text-[9px] text-muted/50">{hint}</span>
-                    <Toggle
-                      checked={enabled}
-                      onChange={(e) => { e?.stopPropagation(); setDatasetEnabled(key, !enabled) }}
-                    />
-                  </button>
-                )
-              })}
-
-              {/* 其他数据集（平级） */}
-              {(['adj_factor', 'realtime', 'minute'] as DatasetKey[]).map(key => {
-                const enabled = !!config.datasets[key]
+                const hint = enabled ? '已配置' : (key === 'etf' ? '跟随股票日K' : '回退 TF')
                 return (
                   <button
                     key={key}
@@ -299,11 +274,8 @@ export function DataSourceEditor({
                     }`}
                   >
                     <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${enabled ? 'bg-accent' : 'bg-muted/30'}`} />
-                    <span className="flex-1 text-left">{DATASET_LABEL[key]}</span>
-                    {enabled
-                      ? <span className="text-[9px] text-accent">已配置</span>
-                      : <span className="text-[9px] text-muted/50">回退 TF</span>
-                    }
+                    <span className="flex-1 text-left">{label}</span>
+                    <span className={`text-[9px] ${enabled ? 'text-accent' : 'text-muted/50'}`}>{hint}</span>
                     <Toggle
                       checked={enabled}
                       onChange={(e) => { e?.stopPropagation(); setDatasetEnabled(key, !enabled) }}

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Check, Database, Plus, RefreshCw, Zap, FileWarning } from 'lucide-react'
@@ -10,6 +10,7 @@ import { DataSourceEditor } from './DataSourceEditor'
 
 const DATASET_LABEL: Record<string, string> = {
   daily: '日K',
+  etf: 'ETF',
   adj_factor: '除权',
   realtime: '实时',
   minute: '分钟',
@@ -48,6 +49,7 @@ export function SettingsDataSourcesPanel() {
         return api.updateDataProviders({
           daily_data_provider: 'tickflow',
           adj_factor_provider: 'same_as_daily',
+          etf_data_provider: 'same_as_daily',
           realtime_data_provider: 'tickflow',
           minute_data_provider: 'tickflow',
           financial_data_provider: 'tickflow',
@@ -62,6 +64,7 @@ export function SettingsDataSourcesPanel() {
       const pick = (dataset: string) => (supported.has(dataset) ? name : 'tickflow')
       return api.updateDataProviders({
         daily_data_provider: pick('daily'),
+        etf_data_provider: pick('daily'), // ETF 复用 daily dataset
         adj_factor_provider: 'same_as_daily', // 除权始终跟随日K
         realtime_data_provider: pick('realtime'),
         minute_data_provider: pick('minute'),
@@ -111,6 +114,14 @@ export function SettingsDataSourcesPanel() {
   const customList: DataSourceItem[] = sources.data?.custom ?? []
   const errors = sources.data?.errors ?? []
   const activeName = prefs.data?.daily_data_provider || 'tickflow'
+
+  // 进入页面时默认选中当前使用的数据源 (prefs 异步加载, 仅同步一次, 不覆盖用户后续手动选择)
+  const didInitSelection = useRef(false)
+  useEffect(() => {
+    if (didInitSelection.current || !prefs.data) return
+    didInitSelection.current = true
+    setSelected(activeName)
+  }, [prefs.data, activeName])
 
   // 插件 name → 状态 (供卡片渲染时判断 available/installing 等)
   const pluginMap = new Map(pluginList.map(p => [p.name, p]))
@@ -429,7 +440,11 @@ function PluginDetail({ plugin, isActive, onSwitch, switching }: {
   )
 }
 
-function TickFlowDetail({ active, onSwitch, switching }: { active: boolean; onSwitch: () => void; switching: boolean }) {
+function TickFlowDetail({ active, onSwitch, switching }: {
+  active: boolean
+  onSwitch: () => void
+  switching: boolean
+}) {
   return (
     <section className="rounded-card border border-border bg-surface p-6">
       <div className="flex items-start gap-4 mb-5">
