@@ -9,3 +9,4 @@
 - 不覆盖工作区已有修改，不虚构测试或审查结果。
 - 以实际验证结果作为完成标准。
 - 分支与提交规则遵循 [`FORKING.md`](FORKING.md)：禁止在 `main` 提交，个人工作走 `dev-main` 及功能分支。
+- fork 私有开发知识见 [`docs/DEV_NOTES.md`](docs/DEV_NOTES.md)（ETF 实时行情接入等场景说明，后续按主题追加）。
