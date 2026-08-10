@@ -24,7 +24,7 @@ from app.backtest.matrix import (
     slice_signal_matrix,
     validate_signal_matrix,
 )
-from app.backtest.strategy import build_matrix_cache_profile
+from app.backtest.strategy import StrategyBacktestService, build_matrix_cache_profile
 from app.indicators.pipeline import (
     compute_indicators,
     compute_limit_signals,
@@ -693,6 +693,31 @@ def test_etf_cache_profile_excludes_shares_fields():
     assert "float_shares" not in profile.field_columns
     assert "turnover_rate" not in profile.field_columns
     assert {"open", "high", "low", "close", "volume"}.issubset(profile.field_columns)
+
+
+def test_effective_basic_filter_neutralizes_shares_for_etf():
+    """UI overrides/持久化设置可能带股本类阈值 (market_cap_min=10e8);
+    非 stock 资产必须中和, stock 保持原值。"""
+    engine = StrategyEngine(
+        strategy_dirs=[REPO_ROOT / "backend" / "app" / "strategy" / "builtin"]
+    )
+    strategy = next(
+        s for s in engine.strategy_definitions()
+        if s.execution_backend == "matrix_native"
+    )
+    overrides = {"basic_filter": {"market_cap_min": 10e8, "turnover_min": 3.0}}
+
+    etf_filter = StrategyBacktestService._effective_basic_filter(
+        strategy, overrides, asset_type="etf"
+    )
+    assert etf_filter["market_cap_min"] is None
+    assert etf_filter["turnover_min"] is None
+
+    stock_filter = StrategyBacktestService._effective_basic_filter(
+        strategy, overrides, asset_type="stock"
+    )
+    assert stock_filter["market_cap_min"] == 10e8
+    assert stock_filter["turnover_min"] == 3.0
 
 
 def test_chunked_matrix_score_matches_previous_full_matrix_formula():

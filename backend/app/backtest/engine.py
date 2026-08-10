@@ -415,6 +415,10 @@ class BacktestEngine:
             | set(feature_plan.instrument_columns)
             | set(feature_plan.matrix_columns)
         )
+        if asset_type != "stock":
+            # 兜底: ETF/指数无股本数据, 即使 feature_plan 经 overrides 引入了
+            # 股本类字段也在此剔除, 避免 parquet 字段解析报 unavailable。
+            field_columns -= {"total_shares", "float_shares", "turnover_rate"}
         cache_root = (
             self.repo.store.data_dir / ".backtest_matrix_cache"
             if settings.backtest_matrix_disk_cache_enabled

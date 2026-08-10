@@ -54,6 +54,20 @@ _EXECUTION_COLUMNS = frozenset({
 _LIMIT_BASE_COLUMNS = frozenset({"raw_close", "raw_high"})
 _INSTRUMENT_COLUMNS = frozenset({"name", "total_shares", "float_shares"})
 
+# 股本类过滤键依赖 total_shares/float_shares, 仅 stock instruments 具备这两列;
+# ETF/指数必须强制为 None, 否则 _resolve_matrix_storage_fields 报
+# "matrix parquet fields unavailable" (写 0.0 也会按 is not None 判定为依赖)。
+_SHARES_FILTER_KEYS = (
+    "turnover_min",
+    "turnover_max",
+    "market_cap_min",
+    "market_cap_max",
+    "float_cap_min",
+    "float_cap_max",
+)
+# 非 stock 资产 (ETF/指数) parquet 与 instruments 均无股本数据, 矩阵字段需剔除
+_NON_STOCK_EXCLUDED_FIELDS = frozenset({"total_shares", "float_shares", "turnover_rate"})
+
 
 @dataclass(frozen=True)
 class FeaturePlan:
@@ -269,17 +283,7 @@ def build_matrix_cache_profile(
         "float_cap_min": 0.0,
         "exclude_st": True,
     }
-    # 股本类过滤键依赖 total_shares/float_shares, 仅 stock instruments 具备这两列;
-    # ETF/指数必须强制为 None, 否则 _resolve_matrix_storage_fields 报
-    # "matrix parquet fields unavailable" (写 0.0 也会按 is not None 判定为依赖)。
-    shares_filter_keys = (
-        "turnover_min",
-        "turnover_max",
-        "market_cap_min",
-        "market_cap_max",
-        "float_cap_min",
-        "float_cap_max",
-    )
+    shares_filter_keys = _SHARES_FILTER_KEYS
     if asset_type != "stock":
         common_filter = {
             key: (None if key in shares_filter_keys else value)
@@ -332,9 +336,7 @@ def build_matrix_cache_profile(
         # ETF/指数 parquet 与 instruments 均无股本数据: 剔除依赖 total_shares/
         # float_shares 的字段 (含评分/必备字段间接引入的 turnover_rate), 否则缓存
         # 构建在换手率矩阵填充处报 "matrix turnover_rate requires float_shares"。
-        fields = frozenset(
-            fields - {"total_shares", "float_shares", "turnover_rate"}
-        )
+        fields = frozenset(fields - _NON_STOCK_EXCLUDED_FIELDS)
     generation_payload = json.dumps(
         {
             "asset_type": asset_type,
@@ -788,7 +790,7 @@ class StrategyBacktestService:
         )
 
         overrides = first.overrides or {}
-        basic_filter = self._effective_basic_filter(strategy, overrides)
+        basic_filter = self._effective_basic_filter(strategy, overrides, first.asset_type)
         entry_signals = self._effective_signals(overrides, "entry_signals", strategy.entry_signals)
         exit_signals = self._effective_signals(overrides, "exit_signals", strategy.exit_signals)
         resolver = StrategyDependencyResolver()
@@ -960,7 +962,7 @@ class StrategyBacktestService:
 
         params = self._normalize_params(config.params or {}, s)
         overrides = config.overrides or {}
-        basic_filter = self._effective_basic_filter(s, overrides)
+        basic_filter = self._effective_basic_filter(s, overrides, config.asset_type)
         entry_signals = self._effective_signals(overrides, "entry_signals", s.entry_signals)
         exit_signals = self._effective_signals(overrides, "exit_signals", s.exit_signals)
         if config.exit_fill == "signal_next_minute":
@@ -1847,11 +1849,16 @@ class StrategyBacktestService:
     # ── 工具 ──
 
     @staticmethod
-    def _effective_basic_filter(s: StrategyDef, overrides: dict) -> dict:
+    def _effective_basic_filter(s: StrategyDef, overrides: dict, asset_type: str = "stock") -> dict:
         basic_filter = dict(s.basic_filter or {})
         override_filter = overrides.get("basic_filter")
         if isinstance(override_filter, dict):
             basic_filter.update(override_filter)
+        if asset_type != "stock":
+            # UI/持久化设置可能带股本类阈值 (如 market_cap_min=10e8), ETF/指数
+            # 无 total_shares/float_shares 数据, 必须中和否则矩阵字段解析报错。
+            for key in _SHARES_FILTER_KEYS:
+                basic_filter[key] = None
         return basic_filter
 
     @staticmethod
