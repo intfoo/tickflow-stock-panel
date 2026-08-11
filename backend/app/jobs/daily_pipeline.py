@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import polars as pl
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.indicators.pipeline import run_pipeline
@@ -632,11 +634,25 @@ def _refresh_instruments_view(repo: KlineRepository) -> None:
         logger.warning("refresh instruments view failed: %s", e)
 
 
-def _run_tracked(fn, job_label: str) -> None:
+# 自动同步失败重试策略(仅限调度路径, 手动 /api/pipeline/run 不受影响):
+#   硬失败(非 PipelineStageError)后 3 分钟自动重试, 只重试 1 次。
+#   软失败(PipelineStageError: 部分阶段失败, 主流程数据已落盘)不重试 ——
+#   重跑整个管道只为补一个软阶段不划算, 等下一个 cron 周期自愈。
+#   重试为内存态: 3 分钟窗口内进程重启则丢失, 等下一个 cron 周期(可接受)。
+_RETRY_DELAY_S = 180
+
+# start_scheduler 启动后赋值, 供 _schedule_retry 排一次性重试任务。
+_scheduler: AsyncIOScheduler | None = None
+
+
+def _run_tracked(fn, job_label: str, *, retry: bool = False,
+                 _is_retry: bool = False, _last_error: str = "") -> None:
     """调度触发时包装 JobStore 跟踪，确保同步历史有记录。
 
     单飞: 若已有活跃(pending∨running)任务(手动同步中), 本次调度直接跳过, 不并发。
     重任务执行槽: 再挡一层僵尸并发(reap 后线程仍活时不得并行写 parquet)。
+    retry=True 时硬失败自动重试 1 次(见模块级 _RETRY_DELAY_S 注释)。
+    重试时刻若有任务在跑(如用户手动同步), 按单飞语义跳过, 本次重试机会被消耗。
     """
     from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
 
@@ -655,14 +671,34 @@ def _run_tracked(fn, job_label: str) -> None:
 
     try:
         job_store.start(job_id)
+        if _is_retry:
+            progress("init", 0, f"自动重试（上次失败：{_last_error}）")
         result = fn(on_progress=progress)
         job_store.succeed(job_id, result)
         logger.info("scheduled %s completed: job_id=%s", job_label, job_id)
-    except Exception:
+    except Exception as e:  # noqa: BLE001
         logger.exception("scheduled %s failed: job_id=%s", job_label, job_id)
-        job_store.fail(job_id, f"scheduled {job_label} failed")
+        # 保留实际异常信息(此前是固定字符串, 排障时看不到根因; 与手动路径 str(e) 对齐)
+        job_store.fail(job_id, f"scheduled {job_label} failed: {e}")
+        if retry and not _is_retry and not isinstance(e, PipelineStageError):
+            _schedule_retry(fn, job_label, str(e))
     finally:
         release_run_slot()
+
+
+def _schedule_retry(fn, job_label: str, last_error: str) -> None:
+    """硬失败后排一次性重试(3 分钟后, 只 1 次; _is_retry=True 防止重试套重试)。"""
+    if _scheduler is None:
+        return
+    run_at = datetime.now(_scheduler.timezone) + timedelta(seconds=_RETRY_DELAY_S)
+    _scheduler.add_job(
+        lambda: _run_tracked(fn, job_label, retry=True, _is_retry=True, _last_error=last_error),
+        trigger=DateTrigger(run_date=run_at),
+        id=f"retry_{job_label}_{int(run_at.timestamp())}",
+        replace_existing=True,
+    )
+    logger.warning("scheduled %s 将于 %s 自动重试(仅 1 次, 上次失败: %s)",
+                   job_label, run_at.strftime("%H:%M:%S"), last_error)
 
 
 # ================================================================
@@ -888,7 +924,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         return result
 
     scheduler.add_job(
-        lambda: _run_tracked(_instruments_task, "instruments_sync"),
+        lambda: _run_tracked(_instruments_task, "instruments_sync", retry=True),
         trigger=CronTrigger(day_of_week="mon-fri",
                             hour=inst_sched["hour"], minute=inst_sched["minute"],
                             timezone="Asia/Shanghai"),
@@ -922,7 +958,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         return result
 
     scheduler.add_job(
-        lambda: _run_tracked(_pipeline_then_refresh, "daily_pipeline"),
+        lambda: _run_tracked(_pipeline_then_refresh, "daily_pipeline", retry=True),
         trigger=CronTrigger(day_of_week="mon-fri",
                             hour=sched["hour"], minute=sched["minute"],
                             timezone="Asia/Shanghai"),
@@ -990,6 +1026,8 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                     review_sched["hour"], review_sched["minute"])
 
     scheduler.start()
+    global _scheduler
+    _scheduler = scheduler  # 供 _schedule_retry 排一次性重试任务
     logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d mon-fri",
                 inst_sched["hour"], inst_sched["minute"], sched["hour"], sched["minute"],
                 depth_sched["hour"], depth_sched["minute"])

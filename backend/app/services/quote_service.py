@@ -215,15 +215,22 @@ class QuoteService:
         self._save_enabled(True)
         logger.info("行情服务已启动, 轮询间隔 %.1fs", self._interval)
 
-    def stop(self) -> None:
-        """停止后台行情轮询线程。"""
+    def stop(self, *, persist: bool = True) -> None:
+        """停止后台行情轮询线程。
+
+        persist=True (用户主动关闭): 同步写 preferences, 使 UI 开关回弹为关。
+        persist=False (进程关闭清理): 只停线程, 不改 preferences — 保留用户意图,
+        使下次启动 boot_check 能按上次开关态恢复。否则每次关进程都会把开关清零,
+        重启后永远是关的 (与 boot_check 的"恢复上次状态"语义冲突)。
+        """
         self._running = False
         self._enabled = False
         if self._thread:
             self._thread.join(timeout=10)
             self._thread = None
-        self._save_enabled(False)
-        logger.info("行情服务已停止")
+        if persist:
+            self._save_enabled(False)
+        logger.info("行情服务已停止 (persist=%s)", persist)
 
     def enable(self) -> bool:
         """开启自动行情 (不立即启动线程，等下一个交易时段)。

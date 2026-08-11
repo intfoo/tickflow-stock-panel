@@ -254,7 +254,9 @@ async def lifespan(app: FastAPI):
         fsc.stop()
     qs = getattr(app.state, "quote_service", None)
     if qs:
-        qs.stop()
+        # 进程关闭清理: 只停线程, 不改 preferences — 保留用户开关意图,
+        # 使下次启动 boot_check 能按上次开关态恢复。
+        qs.stop(persist=False)
     dsvc = getattr(app.state, "depth_service", None)
     if dsvc:
         dsvc.stop_polling()
