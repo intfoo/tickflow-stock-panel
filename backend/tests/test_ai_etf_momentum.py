@@ -241,6 +241,57 @@ def test_state_machine_take_profit_and_lock():
     assert entry_days_a[0] < tp_t, "A 的首次 entry 应在止盈之前"
 
 
+def test_windowed_scan_replay_converges_with_warmup():
+    """回归：选股/监控按 required_warmup_bars 截窗重放状态机，窗口必须够长。
+
+    2026-08 事故：扫描只加载 m_days+1≈32 根 K 线，短窗从空仓重放，
+    末根 bar 信号与完整历史重放不一致（选股页恒空）。
+    本测试构造确定性场景：完整重放末根 bar 有 entry；
+    用 required_warmup_bars+1 截窗重放必须与之相同；旧的 m_days+1 截窗则丢失。
+
+    场景（m=20）：A 前 100 根走平、之后日涨 0.5%；B 全程走平。
+    完整重放事件链：t=19 买 A（走平期评分≈0 并列取列序前者）
+    → t=109 止盈 A（+5%，锁30）换 B → t=139 A 解禁轮动回 A
+    → t=149 再止盈换 B → t=179 A 解禁再轮动回 A（末根 bar 有 entry/exit）。
+    """
+    m = 20
+    t_n = 180
+    close_a = np.concatenate([
+        np.full(100, 100.0),
+        100.0 * np.power(1.005, np.arange(1, t_n - 100 + 1)),
+    ])
+    close_b = np.full(t_n, 100.0)
+    close = np.column_stack([close_a, close_b])
+    symbols = ("159934.SZ", "513100.SH")
+    params = {"pool": "classic4", "m_days": m, "pos_sl": 0.10}
+
+    # 契约：warmup 必须覆盖 动量窗口 + 最长锁定期(30) + 收敛余量
+    wb = MATRIX_STRATEGY.required_warmup_bars(params)
+    assert wb == m + 90, f"required_warmup_bars={wb}，应为 m+90"
+
+    # 完整重放：末根 bar (t=179) 应为 卖B买A 的轮动
+    full = MATRIX_STRATEGY.compute_signals(_make_market(close, symbols), params)
+    assert full.entry[t_n - 1, 0] == 1, "完整重放末根 bar 应有 A 的 entry"
+    assert full.exit[t_n - 1, 1] == 1, "完整重放末根 bar 应有 B 的 exit"
+
+    # 平台语义：扫描窗口 = required_warmup_bars + 1 根（engine.required_history_bars）
+    win = wb + 1
+    windowed = MATRIX_STRATEGY.compute_signals(
+        _make_market(close[t_n - win:], symbols), params,
+    )
+    assert windowed.entry[win - 1, 0] == 1, \
+        f"{win} 根截窗重放末根 bar 应与完整重放一致（有 A 的 entry）"
+    assert windowed.exit[win - 1, 1] == 1, \
+        f"{win} 根截窗重放末根 bar 应与完整重放一致（有 B 的 exit）"
+
+    # 事故复现：旧的 m_days+1 截窗末根 bar 丢失该 entry
+    short = m + 1
+    bugged = MATRIX_STRATEGY.compute_signals(
+        _make_market(close[t_n - short:], symbols), params,
+    )
+    assert bugged.entry[short - 1, 0] == 0, "短窗重放应复现信号丢失（对照组）"
+
+
 # ═══════════════════════════════════════════════════════════════
 #  第三层：端到端锚点（数据缺失则 skip）
 # ═══════════════════════════════════════════════════════════════
