@@ -307,8 +307,6 @@ export function Data() {
   const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
   const isStarting = startSync.isPending
   const hasData = !!(s?.instruments?.rows || s?.daily?.rows)
-  // none 档(无 key / 无效 key) → 禁用立即同步 (同步依赖付费档的批量端点)
-  const isNoKey = settings.data?.mode === 'none'
   const indexOverviewStats = s ? {
     rows: 0,
     earliest_date: s.index_daily?.earliest_date ?? s.index_enriched?.earliest_date ?? null,
@@ -674,21 +672,6 @@ export function Data() {
       />
 
       <div className="px-8 py-6 space-y-6 max-w-6xl">
-        {/* None 档提示 —— 非阻断: 无需 Key 也可获取历史日K, 仅实时行情等扩展能力受限 */}
-        {isNoKey && (
-          <div className="flex items-center gap-2 rounded-card border border-border bg-elevated/40 px-3 py-2 text-xs">
-            <Info className="h-4 w-4 shrink-0 text-muted" />
-            <span className="text-secondary leading-relaxed">
-              当前为 None 档,将使用免费数据源获取历史日K(无需注册)。
-              配置 API Key 可解锁实时行情监控等扩展能力,前往
-              <Link to="/settings?tab=account" className="mx-0.5 font-medium text-accent hover:underline">
-                配置
-              </Link>
-              。
-            </span>
-          </div>
-        )}
-
         {/* 实时进度 */}
         <AnimatePresence>
           {job.data && (

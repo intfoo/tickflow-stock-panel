@@ -36,7 +36,6 @@ import {
   Flame,
   BarChart3,
   Gauge,
-  Sparkles,
   Layers3,
   Landmark,
   RadioTower,
@@ -208,6 +207,9 @@ function TierBadge({ label, hasKey }: { label: string; hasKey?: boolean }) {
   // none 档显示英文「None」,无 label 时也显示「None」
   const displayLabel = isNone ? 'None' : (label || 'None')
 
+  // none 档(无 key / 无效 key)隐藏 API 设置卡片, 避免占用侧边栏空间
+  if (isNone && !hasKey) return null
+
   return (
     <NavLink
       to="/settings?tab=account"
@@ -241,35 +243,6 @@ function TierBadge({ label, hasKey }: { label: string; hasKey?: boolean }) {
           <Settings className="h-3 w-3 shrink-0 text-muted group-hover:text-blue-300 transition-colors" />
         </div>
 
-      </div>
-    </NavLink>
-  )
-}
-
-function AIConfigBadge({ configured, model }: { configured?: boolean; model?: string }) {
-  return (
-    <NavLink
-      to="/settings?tab=ai"
-      className="mt-2 group block -mx-2.5"
-      title="AI 配置"
-    >
-      <div className="relative overflow-hidden rounded-lg border border-purple-400/20 bg-gradient-to-br from-purple-500/[0.12] via-surface to-surface px-3 py-2 transition-all hover:border-purple-400/35 hover:from-purple-500/[0.16]">
-        <div className="absolute -right-5 -top-6 h-14 w-14 rounded-full bg-purple-500/10 blur-2xl" />
-        <div className="relative flex items-center gap-2">
-          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-purple-400/10 text-purple-300 ring-1 ring-purple-400/20">
-            <Sparkles className="h-3.5 w-3.5" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium text-foreground">AI 配置</span>
-              <span className={`h-1.5 w-1.5 rounded-full ${configured ? 'bg-bear' : 'bg-warning'}`} />
-            </div>
-            <div className="mt-0.5 truncate text-[10px] leading-tight text-muted">
-              {configured ? (model || '已接入模型') : '接入策略生成模型'}
-            </div>
-          </div>
-          <Settings className="h-3 w-3 text-muted group-hover:text-purple-300 transition-colors" />
-        </div>
       </div>
     </NavLink>
   )
@@ -456,10 +429,6 @@ export function Layout() {
           <TierBadge
             label={caps?.label ?? ''}
             hasKey={settingsState?.mode !== 'none'}
-          />
-          <AIConfigBadge
-            configured={settingsState?.ai_configured ?? settingsState?.has_ai_key}
-            model={settingsState?.ai_model}
           />
         </div>
 
