@@ -42,13 +42,20 @@ POOLS = _mod.POOLS
 def _make_market(
     close: np.ndarray,
     symbols: tuple[str, ...],
+    tradable: np.ndarray | None = None,
 ) -> MarketDataMatrix:
-    """从 (T, N) close 矩阵构造 MarketDataMatrix，其余 OHLCV 用 close 填充。"""
+    """从 (T, N) close 矩阵构造 MarketDataMatrix，其余 OHLCV 用 close 填充。
+
+    tradable: 可选 (T, N) 数组覆盖默认的全 1（用于构造停牌/不可交易场景）。
+    """
     t_n, n = close.shape
     close_f32 = close.astype(np.float32, copy=True)
     ohlc = close_f32.copy()
     volume = np.full((t_n, n), 1_000_000.0, dtype=np.float32)
-    tradable = np.ones((t_n, n), dtype=np.uint8)
+    if tradable is None:
+        tradable_arr = np.ones((t_n, n), dtype=np.uint8)
+    else:
+        tradable_arr = tradable.astype(np.uint8, copy=True)
     limit_up = np.zeros((t_n, n), dtype=np.uint8)
     limit_down = np.zeros((t_n, n), dtype=np.uint8)
     timestamps = np.arange(t_n, dtype=np.int64)
@@ -58,7 +65,7 @@ def _make_market(
 
     # 全部设为只读（MarketDataMatrix 是 frozen dataclass，内部验证可能检查）
     for arr in (timestamps, session_ids, ohlc, ohlc, ohlc, close_f32, volume,
-                tradable, limit_up, limit_down):
+                tradable_arr, limit_up, limit_down):
         arr.flags.writeable = False
 
     return MarketDataMatrix(
@@ -72,7 +79,7 @@ def _make_market(
         low=ohlc,
         close=close_f32,
         volume=volume,
-        tradable=tradable,
+        tradable=tradable_arr,
         limit_up_locked=limit_up,
         limit_down_locked=limit_down,
         fields=MappingProxyType({}),
@@ -290,6 +297,94 @@ def test_windowed_scan_replay_converges_with_warmup():
         _make_market(close[t_n - short:], symbols), params,
     )
     assert bugged.entry[short - 1, 0] == 0, "短窗重放应复现信号丢失（对照组）"
+
+
+def test_state_machine_no_rotate_while_holding_untradable():
+    """持仓标的不可交易期间不得轮出；恢复交易后按原逻辑立即换仓。
+
+    构造与 test_state_machine_rotates_to_top1 同族的价格形态（A 先强后弱、
+    B 后强，止盈参数拉高以隔离止盈路径）：先跑基线定位换仓日 rotate_t，
+    再让 A 在 [rotate_t, rotate_t+5) 不可交易（tradable=0，价格仍在）：
+    窗口内不得出现 A 的 exit / B 的 entry，恢复交易当日应立即完成换仓。
+    """
+    t_n = 100
+    m = 20
+    # A: 前 60 根日涨 2%，之后走平；B: 前 60 根走平，之后日涨 2%
+    close_a = np.empty(t_n)
+    close_a[:60] = 100.0 * np.power(1.02, np.arange(60))
+    close_a[60:] = close_a[59]
+    close_b = np.empty(t_n)
+    close_b[:60] = 100.0
+    close_b[60:] = 100.0 * np.power(1.02, np.arange(1, t_n - 60 + 1))
+    close = np.column_stack([close_a, close_b])
+    symbols = ("159934.SZ", "513100.SH")
+    params = {
+        "pool": "classic4", "m_days": m, "pos_sl": 0.10,
+        # 拉高止盈阈值隔离止盈路径，专注换仓行为
+        "tp_gold": 99.0, "tp_nasdaq": 99.0,
+    }
+
+    # 基线：定位 A 被轮出的换仓日（exit code=2）
+    baseline = MATRIX_STRATEGY.compute_signals(_make_market(close, symbols), params)
+    rotate_days = np.where(
+        (baseline.exit[:, 0] == 1) & (baseline.exit_signal_code[:, 0] == 2)
+    )[0]
+    assert len(rotate_days) > 0, "基线应发生 A→B 换仓（构造前提）"
+    rotate_t = int(rotate_days[0])
+    sus_end = rotate_t + 5
+    assert sus_end < t_n, "构造需为停牌窗口预留空间"
+
+    # A 在换仓日起 5 根 bar 不可交易（价格仍在，tradable=0）
+    tradable = np.ones((t_n, 2), dtype=np.uint8)
+    tradable[rotate_t:sus_end, 0] = 0
+    signals = MATRIX_STRATEGY.compute_signals(
+        _make_market(close, symbols, tradable=tradable), params,
+    )
+
+    # 不可交易窗口内：不得卖出 A（停牌卖不掉），不得幽灵买入 B
+    assert not signals.exit[rotate_t:sus_end, 0].any(), \
+        "A 不可交易期间不得出现 exit（轮出停牌持仓是不可成交的幽灵信号）"
+    assert not signals.entry[rotate_t:sus_end, 1].any(), \
+        "A 不可交易期间不得出现 B 的 entry（幽灵换仓买入侧）"
+
+    # 恢复交易当日：B 评分仍最高 → 立即完成换仓
+    assert signals.exit[sus_end, 0] == 1, "恢复交易当日应轮出 A"
+    assert signals.exit_signal_code[sus_end, 0] == 2, "恢复交易当日 exit 应为 rotate(code=2)"
+    assert signals.entry[sus_end, 1] == 1, "恢复交易当日应买入 B"
+
+
+def test_state_machine_no_signal_when_holding_live_bar_missing():
+    """2026-08-13 线上事故复现：持仓标的实时 bar 缺价（NaN+不可交易）不得幽灵换仓。
+
+    事故链路：513100 盘中停牌 1 小时 → 实时矩阵当日 bar 为 NaN、tradable=0
+    → 评分 SCORE_FLOOR 被排除出 avail → 换仓分支误判 Top1 易主
+    → 幽灵轮出 513100、买入 510300 → 监控误报「移出/进入选股结果」。
+    """
+    t_n, m = 80, 20
+    close_a = 100.0 * np.power(1.01, np.arange(t_n))   # A 全程强势
+    close_b = 100.0 * np.power(1.002, np.arange(t_n))  # B 弱动量（评分有效但恒低于 A）
+    close = np.column_stack([close_a, close_b])
+    symbols = ("513100.SH", "510300.SH")
+    params = {
+        "pool": "classic4", "m_days": m, "pos_sl": 0.10,
+        "tp_nasdaq": 99.0, "tp_hs300": 99.0,  # 隔离止盈路径，专注换仓行为
+    }
+
+    # 基线：全程持有 A，末根 bar 无任何信号
+    baseline = MATRIX_STRATEGY.compute_signals(_make_market(close, symbols), params)
+    assert baseline.entry[-1].sum() == 0 and baseline.exit[-1].sum() == 0, \
+        "基线末根 bar 应无信号（构造前提）"
+
+    # 事故形态：A 末根 bar 缺价且不可交易（盘中停牌）
+    close_nan = close.copy()
+    close_nan[-1, 0] = np.nan
+    tradable = np.ones((t_n, 2), dtype=np.uint8)
+    tradable[-1, 0] = 0
+    signals = MATRIX_STRATEGY.compute_signals(
+        _make_market(close_nan, symbols, tradable=tradable), params,
+    )
+    assert signals.entry[-1].sum() == 0, "持仓停牌日不得产生幽灵 entry"
+    assert signals.exit[-1].sum() == 0, "持仓停牌日不得产生幽灵 exit"
 
 
 # ═══════════════════════════════════════════════════════════════
