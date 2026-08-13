@@ -387,6 +387,33 @@ def test_state_machine_no_signal_when_holding_live_bar_missing():
     assert signals.exit[-1].sum() == 0, "持仓停牌日不得产生幽灵 exit"
 
 
+def test_state_machine_no_rotate_when_holding_score_invalid():
+    """持仓可交易但评分失效（窗口数据缺口）时不得轮出。
+
+    与停牌场景的区分：tradable=1 但评分 SCORE_FLOOR（如历史数据缺口
+    恰好覆盖动量窗口、或当日 bar 有价缺量）。此时无法比较动量排名，
+    "易主"判断不可信，应保持持仓而非幽灵换仓。
+    """
+    t_n, m = 80, 20
+    close_a = 100.0 * np.power(1.01, np.arange(t_n))   # A 全程强势
+    close_b = 100.0 * np.power(1.002, np.arange(t_n))  # B 弱动量（评分有效但恒低于 A）
+    close = np.column_stack([close_a, close_b])
+    symbols = ("513100.SH", "510300.SH")
+    params = {
+        "pool": "classic4", "m_days": m, "pos_sl": 0.10,
+        "tp_nasdaq": 99.0, "tp_hs300": 99.0,  # 隔离止盈路径
+    }
+
+    # A 末根 bar 缺价但可交易（tradable 默认全 1）：评分窗口含 NaN → SCORE_FLOOR
+    close_nan = close.copy()
+    close_nan[-1, 0] = np.nan
+    signals = MATRIX_STRATEGY.compute_signals(
+        _make_market(close_nan, symbols), params,
+    )
+    assert signals.entry[-1].sum() == 0, "持仓评分失效日不得产生幽灵 entry"
+    assert signals.exit[-1].sum() == 0, "持仓评分失效日不得产生幽灵 exit"
+
+
 # ═══════════════════════════════════════════════════════════════
 #  第三层：端到端锚点（数据缺失则 skip）
 # ═══════════════════════════════════════════════════════════════
