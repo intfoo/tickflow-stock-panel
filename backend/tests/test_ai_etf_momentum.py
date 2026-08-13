@@ -414,6 +414,49 @@ def test_state_machine_no_rotate_when_holding_score_invalid():
     assert signals.exit[-1].sum() == 0, "持仓评分失效日不得产生幽灵 exit"
 
 
+def test_state_machine_no_take_profit_on_untradable_bar():
+    """止盈/止损不得在不可交易 bar 上触发；恢复交易首日用真实价立即评估。
+
+    幽灵单路径：止盈检查用 ffill 估值，bar 有价格但 tradable=0（零成交量
+    停牌日、实时快照缺价）时按陈旧价触发止盈是不可成交的幽灵卖出，
+    且会连带幽灵买入候选标的。
+    """
+    t_n, m = 80, 20
+    close_a = 100.0 * np.power(1.01, np.arange(t_n))   # A 全程强势
+    close_b = 100.0 * np.power(1.002, np.arange(t_n))  # B 弱动量但评分有效
+    close = np.column_stack([close_a, close_b])
+    symbols = ("513100.SH", "510300.SH")
+    params = {
+        "pool": "classic4", "m_days": m, "pos_sl": 0.10,
+        "tp_nasdaq": 0.20,  # 显式写出默认值，便于阅读
+    }
+
+    # 基线：定位 A 的止盈日（t=19 买入，+20% 后触发，exit code=0，当日换入 B）
+    baseline = MATRIX_STRATEGY.compute_signals(_make_market(close, symbols), params)
+    tp_days = np.where(
+        (baseline.exit[:, 0] == 1) & (baseline.exit_signal_code[:, 0] == 0)
+    )[0]
+    assert len(tp_days) > 0, "基线应触发止盈（构造前提）"
+    tp_t = int(tp_days[0])
+    assert tp_t + 1 < t_n
+
+    # A 仅在止盈触发日不可交易（价格仍在，tradable=0）
+    tradable = np.ones((t_n, 2), dtype=np.uint8)
+    tradable[tp_t, 0] = 0
+    signals = MATRIX_STRATEGY.compute_signals(
+        _make_market(close, symbols, tradable=tradable), params,
+    )
+
+    # 不可交易 bar：不得止盈卖出 A，不得幽灵买入 B
+    assert signals.exit[tp_t, 0] == 0, "不可交易 bar 不得触发止盈（幽灵卖出）"
+    assert signals.entry[tp_t, 1] == 0, "不可交易 bar 不得出现止盈后的幽灵买入"
+
+    # 恢复交易首日：真实价仍高于止盈线 → 立即止盈并换入 B
+    assert signals.exit[tp_t + 1, 0] == 1, "恢复交易首日应触发止盈"
+    assert signals.exit_signal_code[tp_t + 1, 0] == 0, "恢复交易首日 exit 应为 tp(code=0)"
+    assert signals.entry[tp_t + 1, 1] == 1, "恢复交易首日止盈后应换入 B"
+
+
 # ═══════════════════════════════════════════════════════════════
 #  第三层：端到端锚点（数据缺失则 skip）
 # ═══════════════════════════════════════════════════════════════
