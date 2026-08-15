@@ -2,7 +2,7 @@
 
 口径基准: docs/superpowers/specs/2026-08-15-etf-market-page-design.md §5.2
 - 涨幅四个窗口共用同一 close 序列 (kline_etf_enriched, 前复权, 含 live bar)
-- market_cap = share_ffill × nav_ffill (同日期对齐), 万元→亿元
+- market_cap = share_ffill x nav_ffill (同日期对齐), 万元→亿元
 - 资金流尾部 2 个数据日不补 0 (深市 T+1 尾部缺失)
 """
 from __future__ import annotations
@@ -34,13 +34,13 @@ def trading_calendar(repo, start: date, end: date) -> list[date]:
             df = repo.get_index_daily("000001.SH", start, end, ["date"])
             if not df.is_empty() and "date" in df.columns:
                 return sorted(df["date"].to_list())
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("index calendar fallback: %s", e)
     try:
         df = _scan_etf_enriched(start, end, ["date"])
         if not df.is_empty():
             return sorted(df["date"].unique().to_list())
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     dates: set[date] = set()
     for df in (store.read_share(), store.read_nav()):
@@ -69,7 +69,7 @@ def _scan_etf_enriched(start: date, end: date, columns: list[str]) -> pl.DataFra
 
 
 def compute_inflow(share: pl.DataFrame, nav: pl.DataFrame, calendar: list[date]) -> pl.DataFrame:
-    """净流入 = 稀疏份额 diff × nav(日历级 ffill 后 join)。单位: 万元。null 不转 0。"""
+    """净流入 = 稀疏份额 diff x nav(日历级 ffill 后 join)。单位: 万元。null 不转 0。"""
     if share.is_empty():
         return store.read_inflow()  # 空 schema 表
     cal = pl.DataFrame({"trade_date": calendar})
@@ -160,17 +160,37 @@ def leaderboard_rows(repo, broad: set[str], sort: str, order: str,
         w = _window_agg(inflow, cal, days)
         fund = fund.join(w, left_on="symbol", right_on="code", how="left")
         fund = fund.rename({"total": col})
-    # 份额/市值: 各自 ffill 到数据截止日后相乘
-    if not share.is_empty():
-        latest_share = share.group_by("code").agg(pl.col("share").last())
-        fund = fund.join(latest_share, left_on="symbol", right_on="code", how="left")
+    # 份额/市值: share/nav 按 (code, trade_date) union 后排序,
+    # 两列各自 forward_fill().over("code"), 再 group_by 取最后非 null 的 share 与 nav
+    # (两列 ffill 到同一日期=两序列最大日期), 相乘得 market_cap
+    if share.is_empty() and nav.is_empty():
+        fund = fund.with_columns([
+            pl.lit(None, dtype=pl.Float64).alias("share"),
+            pl.lit(None, dtype=pl.Float64).alias("nav"),
+        ])
     else:
-        fund = fund.with_columns(pl.lit(None, dtype=pl.Float64).alias("share"))
-    if not nav.is_empty():
-        latest_nav = nav.group_by("code").agg(pl.col("nav").last())
-        fund = fund.join(latest_nav, left_on="symbol", right_on="code", how="left")
-    else:
-        fund = fund.with_columns(pl.lit(None, dtype=pl.Float64).alias("nav"))
+        # union share+nav 的 (code, trade_date)
+        share_sel = share.select(["code", "trade_date", "share"]) if not share.is_empty() else None
+        nav_sel = nav.select(["code", "trade_date", "nav"]) if not nav.is_empty() else None
+        if share_sel is not None and nav_sel is not None:
+            combined = share_sel.join(nav_sel, on=["code", "trade_date"], how="full", coalesce=True)
+        elif share_sel is not None:
+            combined = share_sel.with_columns(pl.lit(None, dtype=pl.Float64).alias("nav"))
+        else:
+            combined = nav_sel.with_columns(pl.lit(None, dtype=pl.Float64).alias("share"))
+        combined = (
+            combined.sort(["code", "trade_date"])
+            .with_columns([
+                pl.col("share").forward_fill().over("code"),
+                pl.col("nav").forward_fill().over("code"),
+            ])
+            .group_by("code", maintain_order=True)
+            .agg([
+                pl.col("share").last().alias("share"),
+                pl.col("nav").last().alias("nav"),
+            ])
+        )
+        fund = fund.join(combined, left_on="symbol", right_on="code", how="left")
     out = agg.join(fund, on="symbol", how="left").with_columns([
         (pl.col("share") / 1e4).alias("share"),          # 万份→亿份
         (pl.col("share") * pl.col("nav") / 1e4).alias("market_cap"),  # 万元→亿元

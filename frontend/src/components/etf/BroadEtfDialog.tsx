@@ -30,6 +30,11 @@ export function BroadEtfDialog({ open, onClose }: Props) {
     staleTime: 30_000,
   })
 
+  // 重新打开时重置初始化标记，使选中集从最新 broadQuery.data 重新加载
+  useEffect(() => {
+    if (open) setInitialized(false)
+  }, [open])
+
   // 初始化选中集
   useEffect(() => {
     if (!initialized && broadQuery.data) {

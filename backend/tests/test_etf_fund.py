@@ -26,11 +26,12 @@ def _share_df(rows):
     return pl.DataFrame(
         rows,
         schema={"code": pl.Utf8, "trade_date": pl.Date, "share": pl.Float64, "ann_date": pl.Date},
+        orient="row",
     )
 
 
 def _nav(rows):
-    return pl.DataFrame(rows, schema={"code": pl.Utf8, "trade_date": pl.Date, "nav": pl.Float64})
+    return pl.DataFrame(rows, schema={"code": pl.Utf8, "trade_date": pl.Date, "nav": pl.Float64}, orient="row")
 
 
 CAL = [date(2026, 8, 3), date(2026, 8, 4), date(2026, 8, 5),
@@ -64,11 +65,11 @@ class TestStore:
         store.merge_nav(pl.DataFrame(
             [("510300.SH", date(2026, 8, 1), 4.0)],
             schema={"code": pl.Utf8, "trade_date": pl.Date, "nav": pl.Float64},
-        ))
+            orient="row"))
         store.merge_nav(pl.DataFrame(
             [("510300.SH", date(2026, 8, 1), 4.1)],
             schema={"code": pl.Utf8, "trade_date": pl.Date, "nav": pl.Float64},
-        ))
+            orient="row"))
         assert store.read_nav().height == 1
         assert store.read_nav()["nav"][0] == 4.1
 
@@ -104,8 +105,8 @@ class TestCalc:
     def test_sparse_diff_times_nav(self):
         share = _share_df([
             ("A", date(2026, 8, 3), 100.0, date(2026, 8, 4)),
-            ("A", date(2026, 8, 5), 130.0, date(2026, 8, 6)),  # +30万份 × nav 2.0 = 60万
-            ("A", date(2026, 8, 10), 90.0, date(2026, 8, 11)),  # -40万份 × nav 2.2 = -88万
+            ("A", date(2026, 8, 5), 130.0, date(2026, 8, 6)),  # +30万份 x nav 2.0 = 60万
+            ("A", date(2026, 8, 10), 90.0, date(2026, 8, 11)),  # -40万份 x nav 2.2 = -88万
         ])
         nav = _nav([(c, d, v) for c, d, v in [
             ("A", date(2026, 8, 3), 1.0), ("A", date(2026, 8, 4), 1.5),
@@ -175,12 +176,11 @@ class TestFlow:
 
 class TestLeaderboard:
     def _write_enriched(self):
-        # 3 只 ETF × 6 天 close 序列, 验证涨幅窗口
+        # 3 只 ETF x 6 天 close 序列, 验证涨幅窗口
         d = settings.data_dir / "kline_etf_enriched"
-        frames = []
         closes = {"A": [10, 11, 12, 13, 14, 15], "B": [20, 19, 18, 17, 16, 15],
                   "C": [5, 5, 5, 5, 5, 5]}
-        for dt, i in zip(CAL, range(6)):
+        for dt, i in zip(CAL, range(6), strict=False):
             day = d / f"date={dt.isoformat()}"
             day.mkdir(parents=True, exist_ok=True)
             pl.DataFrame({
@@ -211,9 +211,35 @@ class TestLeaderboard:
         assert a["is_broad"] is True
         assert a["inflow_1d"] == pytest.approx(0.02)                # 200万 = 0.02亿
         assert a["share"] == pytest.approx(2.0)                     # 20000万份 = 2亿份
-        assert a["market_cap"] == pytest.approx(4.0)                # 2亿份 × 2元 = 4亿
+        assert a["market_cap"] == pytest.approx(4.0)                # 2亿份 x 2元 = 4亿
         assert rows["B"]["change_pct"] == pytest.approx(15 / 16 - 1)
         assert rows["C"]["inflow_1d"] is None                        # 无资金数据 → None
+
+    def test_market_cap_aligned_ffill(self, monkeypatch):
+        # share 最后变动日 8-10, nav 最后公布日 8-8 -> market_cap = share(8-10) x nav(8-8)
+        self._write_enriched()
+        store.save_broad(["A"])
+        store.merge_share(_share_df([
+            ("A", date(2026, 8, 3), 10000.0, date(2026, 8, 4)),   # 1万份
+            ("A", date(2026, 8, 10), 20000.0, date(2026, 8, 11)),  # 2万份
+        ]))
+        store.merge_nav(_nav([
+            ("A", date(2026, 8, 3), 1.0),
+            ("A", date(2026, 8, 8), 2.0),  # nav 最后公布日早于 share 最后变动日
+        ]))
+        store.write_inflow(pl.DataFrame(
+            [("A", date(2026, 8, 10), 100.0, 200.0)],
+            schema={"code": pl.Utf8, "trade_date": pl.Date,
+                    "inflow_share": pl.Float64, "inflow_amount": pl.Float64},
+            orient="row"))
+        monkeypatch.setattr(etf_fund, "trading_calendar", lambda repo, s, e: CAL)
+        out = etf_fund.leaderboard_rows(repo=None, broad={"A"}, sort="amount",
+                                        order="desc", page=1, size=20, broad_only=False)
+        rows = {r["symbol"]: r for r in out["rows"]}
+        a = rows["A"]
+        assert a["share"] == pytest.approx(2.0)          # 20000万份 = 2亿份
+        assert a["market_cap"] is not None
+        assert a["market_cap"] == pytest.approx(4.0)      # 2亿份 x nav 2.0 = 4亿
 
     def test_sort_and_broad_only_and_pagination(self, monkeypatch):
         self._write_enriched()
@@ -314,6 +340,7 @@ class TestSyncHelpers:
         out = sync.resolve_source()
         assert out["base_url"] == "http://etf-host:3021"
         assert out["headers"] == {"Authorization": "Bearer tok"}
+        assert out["token_env"] == "TK"
 
 
 class TestSyncRun:
@@ -321,7 +348,8 @@ class TestSyncRun:
     async def test_incremental_merges_and_recomputes(self, monkeypatch):
         monkeypatch.setattr(sync, "resolve_source", lambda: {
             "name": "amaz", "base_url": "http://h:3021",
-            "headers": {}, "fingerprint": "fp", "warning": None})
+            "headers": {}, "fingerprint": "fp", "warning": None,
+            "token_env": "TK"})
         calls = []
 
         async def fake_fetch(src, path, start, end):
@@ -341,7 +369,8 @@ class TestSyncRun:
     async def test_backfill_months_resume(self, monkeypatch):
         monkeypatch.setattr(sync, "resolve_source", lambda: {
             "name": "amaz", "base_url": "http://h:3021",
-            "headers": {}, "fingerprint": "fp", "warning": None})
+            "headers": {}, "fingerprint": "fp", "warning": None,
+            "token_env": "TK"})
         st = store.load_state()
         st["completed_months"] = ["2026-01"]
         store.save_state(st)

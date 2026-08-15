@@ -75,7 +75,7 @@ def _month_ranges(start: date, end: date) -> list[tuple[date, date]]:
     return ranges
 
 
-def _pick_dataset_url(config: CustomSourceConfig) -> str:
+def pick_dataset_url(config: CustomSourceConfig) -> str:
     """优先级: etf → daily → 首个 dataset 的 url。"""
     datasets = config.datasets
     for key in ("etf", "daily"):
@@ -104,7 +104,7 @@ def resolve_source() -> dict:
         raise SyncError("配置的数据源已删除, 请重新选择", 409) from None
 
     config = provider.config
-    selected_url = _pick_dataset_url(config)
+    selected_url = pick_dataset_url(config)
     if not selected_url:
         raise SyncError("数据源未配置任何 dataset URL", 409)
 
@@ -144,6 +144,7 @@ def resolve_source() -> dict:
         "headers": headers,
         "fingerprint": fp,
         "warning": warning,
+        "token_env": token_env,
     }
 
 
@@ -255,7 +256,10 @@ def _update_data_range() -> None:
 
 
 async def run_incremental(repo) -> dict:
-    """增量同步: 拉最近 10 天 share+nav → merge → recompute_inflow → 更新 state。"""
+    """增量同步: 拉最近 10 天 share+nav → merge → recompute_inflow → 更新 state。
+
+    须持 _lock 调用(经 trigger)。
+    """
     src = resolve_source()
     end = date.today()
     start = end - timedelta(days=_INCREMENTAL_WINDOW)
@@ -278,7 +282,10 @@ async def run_incremental(repo) -> dict:
 
 
 async def run_backfill(repo, start: date, end: date) -> None:
-    """分批回填: 按自然月分批, 续跑跳过 completed_months, 完成后 recompute + 更新 data_range。"""
+    """分批回填: 按自然月分批, 续跑跳过 completed_months, 完成后 recompute + 更新 data_range。
+
+    须持 _lock 调用(经 trigger)。
+    """
     src = resolve_source()
     months = _month_ranges(start, end)
 
@@ -342,39 +349,36 @@ async def trigger(
 ) -> dict:
     """单飞触发同步: 运行中 → SyncError(409); 否则后台 create_task。
 
-    锁用法: if _lock.locked() 检查 + async with _lock 包住后台任务协程本体。
+    锁用法: locked() 检查 + acquire 合为原子 (空闲时 acquire 不 yield);
+    create_task 失败时 release 防泄漏; 任务 finally release。
     """
     if _lock.locked():
         raise SyncError("同步进行中, 请稍后再试", 409)
+    # 空闲时 acquire 不 yield, 与上面 locked() 检查合起来原子
+    await _lock.acquire()
 
     async def _run():
-        async with _lock:
-            try:
-                if mode == "incremental":
-                    await run_incremental(repo)
-                elif mode == "backfill":
-                    if start is None or end is None:
-                        raise SyncError("backfill 需要 start 和 end", 422)
-                    await run_backfill(repo, start, end)
-            except SyncError:
-                raise
-            except Exception as e:
-                logger.warning("etf_fund sync (%s) failed: %s", mode, e)
-                raise
+        try:
+            if mode == "incremental":
+                await run_incremental(repo)
+            elif mode == "backfill":
+                if start is None or end is None:
+                    raise SyncError("backfill 需要 start 和 end", 422)
+                await run_backfill(repo, start, end)
+        except SyncError:
+            raise
+        except Exception as e:
+            logger.warning("etf_fund sync (%s) failed: %s", mode, e)
+            raise
+        finally:
+            _lock.release()
 
     loop = asyncio.get_running_loop()
-    task = loop.create_task(_run())
-    # 不 await task, 后台运行
-    _ = task  # 防止 lint 警告未使用
+    try:
+        task = loop.create_task(_run())
+    except Exception:
+        _lock.release()
+        raise
+    _ = task  # 防止 lint 警告未使用; 任务后台运行
     return {"ok": True}
 
-
-async def daily_incremental_job(repo) -> None:
-    """cron 入口: 增量同步 (锁占用则跳过)。"""
-    if _lock.locked():
-        logger.info("etf_fund daily incremental skipped: sync in progress")
-        return
-    try:
-        await run_incremental(repo)
-    except Exception as e:
-        logger.warning("etf_fund 每日同步失败: %s", e)

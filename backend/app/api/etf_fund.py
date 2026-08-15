@@ -83,7 +83,7 @@ def put_config(request: Request, body: ConfigIn) -> dict:
         provider = loader.get_provider(body.data_source)
     except ValueError:
         raise HTTPException(404, f"数据源不存在: {body.data_source}") from None
-    base = etf_fund_sync.extract_base_url(etf_fund_sync._pick_dataset_url(provider.config))
+    base = etf_fund_sync.extract_base_url(etf_fund_sync.pick_dataset_url(provider.config))
     token_env = provider.config.auth.token_env
     store.save_config({
         "data_source": body.data_source,
@@ -179,7 +179,9 @@ def register(app) -> None:
 
     async def _job():
         try:
-            await etf_fund_sync.run_incremental(app.state.repo)
+            await etf_fund_sync.trigger("incremental", app.state.repo)
+        except etf_fund_sync.SyncError as e:
+            logger.info("etf_fund 每日同步跳过: 已有同步进行中 (%s)", e)
         except Exception as e:
             logger.warning("etf_fund 每日同步失败: %s", e)
 
