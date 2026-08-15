@@ -101,6 +101,14 @@ async def lifespan(app: FastAPI):
         logger.warning("scheduler not started: %s", e)
         app.state.scheduler = None
 
+    # ETF 份额/资金独立模块 (fork 私有): 注册 /api/etf-fund 路由 + 每日增量同步 cron。
+    # 须在 start_scheduler 之后 (依赖 app.state.scheduler)。
+    try:
+        from app.api import etf_fund as etf_fund_api
+        etf_fund_api.register(app)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("etf_fund init failed (不影响启动): %s", e)
+
     # depth sealed: 启动补跑(当天文件不存在) + 盘中轮询(有能力时)
     try:
         depth_service.boot_check()
