@@ -90,6 +90,15 @@ export const QK = {
   regimeLatest:         ['regime-latest'] as const,
   regimeStates:         (days: number) => ['regime-states', days] as const,
   regimeCoverage:       ['regime-coverage'] as const,
+
+  // ETF 资金/份额
+  etfFundConfig:        ['etf-fund', 'config'] as const,
+  etfFundStatus:        ['etf-fund', 'status'] as const,
+  etfFundBroad:         ['etf-fund', 'broad'] as const,
+  etfFundInstruments:   ['etf-fund', 'instruments'] as const,
+  etfFundLeaderboard:   (p: { sort: string; order: string; page: number; size: number; broad_only: boolean }) =>
+                           ['etf-fund', 'leaderboard', p] as const,
+  etfFundFlow:          (days: number) => ['etf-fund', 'flow', days] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====

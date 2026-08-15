@@ -46,6 +46,7 @@ import {
   Moon,
   X,
   WifiOff,
+  LineChart,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
@@ -80,6 +81,7 @@ const nav = [
   { to: '/regime', label: '市场环境', icon: Gauge, badge: 'beta' },
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/indices', label: '指数', icon: BarChart3 },
+  { to: '/etf', label: 'ETF行情', icon: LineChart },
   { to: '/data',       label: '数据',   icon: Database },
 ] as const
 

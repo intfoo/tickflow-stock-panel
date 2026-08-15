@@ -2533,3 +2533,77 @@ export interface AnalysisMenu {
   updated_at?: string | null
   builtin?: boolean
 }
+
+// ===== ETF 资金/份额 (fork 私有, 追加于文件末尾降低上游合并冲突) =====
+
+export interface EtfInstrumentItem { symbol: string; name: string }
+
+export interface EtfFundConfig {
+  sources: { name: string; display_name: string }[]
+  data_source: string | null
+  source_changed: boolean
+  overlay_index: string
+  warning: string | null
+}
+
+export interface EtfFundStatus {
+  last_sync: string | null
+  completed_months: string[]
+  backfill: { running: boolean; total: number; done: number; current: string | null; error: string | null }
+  data_range: { min: string | null; max: string | null }
+  configured: boolean
+  source_changed: boolean
+}
+
+export interface EtfLeaderboardRow {
+  symbol: string
+  price: number | null
+  change_pct: number | null
+  change_pct_5d: number | null
+  change_pct_20d: number | null
+  change_pct_60d: number | null
+  share: number | null
+  inflow_1d: number | null
+  inflow_5d: number | null
+  inflow_20d: number | null
+  inflow_60d: number | null
+  amount: number | null
+  market_cap: number | null
+  is_broad: boolean
+}
+
+export interface EtfLeaderboardResult {
+  rows: EtfLeaderboardRow[]
+  total: number
+  data_date: string | null
+}
+
+export interface EtfFlowResult {
+  series: { trade_date: string; amount: number }[]
+  stats: {
+    yesterday: number | null
+    d5: number | null
+    d20: number | null
+    d60: number | null
+    data_end_date: string | null
+  }
+}
+
+export const etfFundApi = {
+  getConfig: () => request<EtfFundConfig>('/api/etf-fund/config'),
+  putConfig: (body: { data_source: string; overlay_index?: string }) =>
+    request<EtfFundConfig>('/api/etf-fund/config', { method: 'PUT', body: JSON.stringify(body) }),
+  getBroad: () => request<{ symbols: string[]; items: EtfInstrumentItem[] }>('/api/etf-fund/broad'),
+  putBroad: (symbols: string[]) =>
+    request<{ symbols: string[]; items: EtfInstrumentItem[] }>('/api/etf-fund/broad', {
+      method: 'PUT', body: JSON.stringify({ symbols }),
+    }),
+  getInstruments: () => request<{ items: EtfInstrumentItem[] }>('/api/etf-fund/instruments'),
+  postSync: (body: { mode: 'incremental' | 'backfill'; start?: string; end?: string }) =>
+    request<{ ok: boolean }>('/api/etf-fund/sync', { method: 'POST', body: JSON.stringify(body) }),
+  getStatus: () => request<EtfFundStatus>('/api/etf-fund/status'),
+  getLeaderboard: (params: { sort: string; order: 'asc' | 'desc'; page: number; size: number; broad_only: boolean }) =>
+    request<EtfLeaderboardResult>(
+      `/api/etf-fund/leaderboard?sort=${params.sort}&order=${params.order}&page=${params.page}&size=${params.size}&broad_only=${params.broad_only}`),
+  getFlow: (days = 120) => request<EtfFlowResult>(`/api/etf-fund/flow?days=${days}`),
+}

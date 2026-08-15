@@ -45,6 +45,7 @@ const BUILTIN_PAGES: NavEntry[] = [
   { id: '/indices', label: '指数', type: 'builtin', visible: true },
   { id: '/monitor', label: '监控中心', type: 'builtin', visible: true },
   { id: '/data', label: '数据', type: 'builtin', visible: true },
+  { id: '/etf', label: 'ETF行情', type: 'builtin', visible: true },
 ]
 
 // ── Sortable row ──
