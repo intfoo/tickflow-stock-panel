@@ -78,6 +78,13 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
     // dataZoom 默认聚焦最近 120 个交易日 (全量数据已加载, 可拖回更早)
     const zoomStart = dates.length > 120 ? (1 - 120 / dates.length) * 100 : 0
 
+    // 累计净流入: 从图表数据第一天起逐日累加 (亿元, 与柱状共用左轴)
+    let cum = 0
+    const cumulative = amounts.map(v => {
+      cum = Math.round((cum + v) * 1e4) / 1e4
+      return cum
+    })
+
     const option: EChartsOption = {
       animation: false,
       backgroundColor: 'transparent',
@@ -90,7 +97,7 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
         textStyle: { color: ct.tooltipText, fontSize: 11 },
       },
       legend: {
-        data: ['宽基ETF申购净流入', '宽基ETF申购净流出', overlayName],
+        data: ['宽基ETF申购净流入', '宽基ETF申购净流出', '累计净流入', overlayName],
         top: 0,
         textStyle: { color: ct.text, fontSize: 10 },
         itemWidth: 12,
@@ -147,6 +154,16 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
           data: inflowNeg,
           itemStyle: { color: GREEN },
           yAxisIndex: 0,
+        },
+        {
+          name: '累计净流入',
+          type: 'line',
+          data: cumulative,
+          yAxisIndex: 0,
+          symbol: 'none',
+          lineStyle: { width: 1.4, color: '#F59E0B' },
+          itemStyle: { color: '#F59E0B' },
+          z: 3,
         },
         {
           name: overlayName,
