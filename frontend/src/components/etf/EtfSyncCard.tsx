@@ -52,11 +52,20 @@ export function EtfSyncCard() {
   }
 
   const handleBackfill = () => {
-    if (!backfillStart || !backfillEnd) {
-      toast('请选择回填起止日期', 'error')
+    const fmt = /^\d{4}-\d{2}-\d{2}$/
+    if (!fmt.test(backfillStart) || !fmt.test(backfillEnd)) {
+      toast('请输入 YYYY-MM-DD 格式的起止日期', 'error')
+      return
+    }
+    if (backfillStart > backfillEnd) {
+      toast('开始日期不能晚于结束日期', 'error')
       return
     }
     syncMutation.mutate({ mode: 'backfill', start: backfillStart, end: backfillEnd })
+  }
+
+  const handleResave = () => {
+    if (config?.data_source) saveConfigMutation.mutate(config.data_source)
   }
 
   const backfillRunning = status?.backfill?.running ?? false
@@ -119,11 +128,18 @@ export function EtfSyncCard() {
       {sourceChanged && (
         <div className="flex items-center gap-1.5 rounded bg-warning/10 px-2 py-1 text-[10px] text-warning">
           <AlertTriangle className="h-3 w-3 shrink-0" />
-          <span>数据源配置已变化，请重新选择保存</span>
+          <span className="flex-1">数据源配置已变化（URL/认证与保存时不一致）</span>
+          <button
+            onClick={handleResave}
+            disabled={saveConfigMutation.isPending}
+            className="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 font-medium hover:bg-warning/30 disabled:opacity-50"
+          >
+            重新保存
+          </button>
         </div>
       )}
 
-      {config?.warning && (
+      {config?.warning && !config.warning.includes('已变化') && (
         <div className="text-[10px] text-warning/80">{config.warning}</div>
       )}
 
@@ -147,17 +163,19 @@ export function EtfSyncCard() {
         <div className="text-xs text-secondary">历史回填</div>
         <div className="flex items-center gap-2">
           <input
-            type="date"
+            type="text"
+            placeholder="YYYY-MM-DD"
             value={backfillStart}
-            onChange={e => setBackfillStart(e.target.value)}
-            className="rounded border border-border bg-base px-2 py-1 text-xs text-secondary outline-none focus:border-accent"
+            onChange={e => setBackfillStart(e.target.value.trim())}
+            className="w-28 rounded border border-border bg-base px-2 py-1 text-xs text-secondary outline-none focus:border-accent placeholder:text-muted/40"
           />
           <span className="text-xs text-muted">至</span>
           <input
-            type="date"
+            type="text"
+            placeholder="YYYY-MM-DD"
             value={backfillEnd}
-            onChange={e => setBackfillEnd(e.target.value)}
-            className="rounded border border-border bg-base px-2 py-1 text-xs text-secondary outline-none focus:border-accent"
+            onChange={e => setBackfillEnd(e.target.value.trim())}
+            className="w-28 rounded border border-border bg-base px-2 py-1 text-xs text-secondary outline-none focus:border-accent placeholder:text-muted/40"
           />
           <button
             onClick={handleBackfill}
