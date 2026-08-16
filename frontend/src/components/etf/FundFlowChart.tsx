@@ -46,11 +46,29 @@ function cumFrom(amounts: number[], startIdx: number): (number | null)[] {
   })
 }
 
+/** 可见窗口内柱轴范围 (含 0 基线 + 10% 余量), 让柱子始终撑满可视高度 */
+function barRange(amounts: number[], startIdx: number, endIdx: number): { min: number; max: number } {
+  let lo = 0
+  let hi = 0
+  for (let i = startIdx; i <= endIdx && i < amounts.length; i++) {
+    const v = amounts[i]
+    if (v < lo) lo = v
+    if (v > hi) hi = v
+  }
+  const pad = Math.max((hi - lo) * 0.1, 0.01)
+  return {
+    min: Math.floor((lo - pad) * 100) / 100,
+    max: Math.ceil((hi + pad) * 100) / 100,
+  }
+}
+
 export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, onStatDaysChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<echarts.ECharts | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
   const amountsRef = useRef<number[]>([])
+  const datesRef = useRef<string[]>([])
+  const cumStartDateRef = useRef('')
   const ct = useChartTheme()
 
   const overlayName = OVERLAY_INDEXES.find(i => i.symbol === overlayIndex)?.name ?? overlayIndex
@@ -71,6 +89,7 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
     const dates = series.map(s => s.trade_date)
     const amounts = series.map(s => s.amount)
     amountsRef.current = amounts
+    datesRef.current = dates
 
     let chart = chartRef.current
     if (!chart) {
@@ -78,16 +97,25 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
       chartRef.current = chart
       roRef.current = new ResizeObserver(() => chart!.resize())
       roRef.current.observe(el)
-      // 累计净流入从「当前可见窗口第一天」起算: 拖动/缩放 dataZoom 时重算
+      // 拖动/缩放 dataZoom 时: 1) 累计净流入从可见窗口第一天起重算
+      // 2) 柱轴按可见窗口内柱值动态缩放 (柱子在任何区间都撑满可视高度)
       chart.on('dataZoom', () => {
         const c = chartRef.current
         if (!c) return
-        const dz = (c.getOption().dataZoom as { start?: number }[] | undefined)?.[0]
+        const dz = (c.getOption().dataZoom as { start?: number; end?: number }[] | undefined)?.[0]
         const start = dz?.start ?? 0
-        const n = amountsRef.current.length
+        const endPct = dz?.end ?? 100
+        const arr = amountsRef.current
+        const n = arr.length
         if (n === 0) return
         const startIdx = Math.round((start / 100) * (n - 1))
-        c.setOption({ series: [{ id: 'cum', data: cumFrom(amountsRef.current, startIdx) }] })
+        const endIdx = Math.min(n - 1, Math.round((endPct / 100) * (n - 1)))
+        cumStartDateRef.current = datesRef.current[startIdx] ?? ''
+        const range = barRange(arr, startIdx, endIdx)
+        c.setOption({
+          series: [{ id: 'cum', data: cumFrom(arr, startIdx) }],
+          yAxis: [{ min: range.min, max: range.max }],
+        })
       })
     }
 
@@ -102,9 +130,13 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
     // dataZoom 默认聚焦最近 120 个交易日 (全量数据已加载, 可拖回更早)
     const zoomStartIdx = dates.length > 120 ? dates.length - 120 : 0
     const zoomStart = dates.length > 1 ? (zoomStartIdx / (dates.length - 1)) * 100 : 0
+    cumStartDateRef.current = dates[zoomStartIdx] ?? ''
 
-    // 累计净流入: 从可见窗口第一天起逐日累加 (亿元, 与柱状共用左轴)
+    // 累计净流入: 从可见窗口第一天起逐日累加 (亿元, 独立隐藏轴)
     const cumulative = cumFrom(amounts, zoomStartIdx)
+
+    // 柱轴初始范围按默认窗口内柱值 (之后随 dataZoom 动态缩放)
+    const initBarRange = barRange(amounts, zoomStartIdx, dates.length - 1)
 
     const option: EChartsOption = {
       animation: false,
@@ -116,6 +148,26 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
         borderColor: ct.tooltipBorder,
         borderWidth: 1,
         textStyle: { color: ct.tooltipText, fontSize: 11 },
+        formatter: (params: unknown) => {
+          const items = params as {
+            axisValueLabel?: string
+            axisValue?: string
+            marker?: string
+            seriesName?: string
+            seriesId?: string
+            value?: number | null
+          }[]
+          if (!Array.isArray(items) || items.length === 0) return ''
+          const title = items[0].axisValueLabel ?? items[0].axisValue ?? ''
+          const lines = items.map(p => {
+            const v = p.value == null ? '--' : Number(p.value).toFixed(2)
+            if (p.seriesId === 'cum') {
+              return `${p.marker ?? ''} 累计净流入(自${cumStartDateRef.current || '--'}起): ${v}亿`
+            }
+            return `${p.marker ?? ''} ${p.seriesName}: ${v}`
+          })
+          return [title, ...lines].join('<br/>')
+        },
       },
       legend: {
         data: ['宽基ETF申购净流入', '宽基ETF申购净流出', '累计净流入', overlayName],
@@ -135,15 +187,19 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
       },
       yAxis: [
         {
+          // 左轴: 每日净流入柱 (随可见窗口动态缩放, 见 dataZoom 处理)
           type: 'value',
           name: '净流入(亿)',
           nameTextStyle: { color: ct.text, fontSize: 9 },
+          min: initBarRange.min,
+          max: initBarRange.max,
           axisLine: { show: false },
           axisTick: { show: false },
           axisLabel: { color: ct.text, fontSize: 9, fontFamily: 'JetBrains Mono, monospace' },
           splitLine: { lineStyle: { color: ct.grid } },
         },
         {
+          // 右轴: 叠加指数
           type: 'value',
           name: overlayName,
           nameTextStyle: { color: ct.text, fontSize: 9 },
@@ -152,6 +208,12 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
           axisTick: { show: false },
           axisLabel: { color: ct.text, fontSize: 9, fontFamily: 'JetBrains Mono, monospace' },
           splitLine: { show: false },
+        },
+        {
+          // 累计净流入独立轴: 隐藏刻度, 只作独立缩放 (避免千亿级累计值压扁每日柱)
+          type: 'value',
+          show: false,
+          scale: true,
         },
       ],
       dataZoom: [
@@ -181,7 +243,7 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
           name: '累计净流入',
           type: 'line',
           data: cumulative,
-          yAxisIndex: 0,
+          yAxisIndex: 2,
           symbol: 'none',
           lineStyle: { width: 1.4, color: '#F59E0B' },
           itemStyle: { color: '#F59E0B' },
