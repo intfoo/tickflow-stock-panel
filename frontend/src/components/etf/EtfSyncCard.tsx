@@ -63,8 +63,10 @@ export function EtfSyncCard() {
     },
   })
 
+  const [batchDays, setBatchDays] = useState(30)
+
   const syncMutation = useMutation({
-    mutationFn: (body: { mode: 'incremental' | 'backfill'; start?: string; end?: string }) =>
+    mutationFn: (body: { mode: 'incremental' | 'backfill'; start?: string; end?: string; batch_days?: number }) =>
       etfFundApi.postSync(body),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: QK.etfFundStatus })
@@ -86,7 +88,7 @@ export function EtfSyncCard() {
       toast('开始日期不能晚于结束日期', 'error')
       return
     }
-    syncMutation.mutate({ mode: 'backfill', start: backfillStart, end: backfillEnd })
+    syncMutation.mutate({ mode: 'backfill', start: backfillStart, end: backfillEnd, batch_days: batchDays })
   }
 
   const backfillRunning = status?.backfill?.running ?? false
@@ -173,7 +175,21 @@ export function EtfSyncCard() {
 
       {/* 回填 */}
       <div className="border-t border-border/50 pt-2 space-y-2">
-        <div className="text-xs text-secondary">历史回填</div>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-secondary">历史回填</span>
+          <label className="flex items-center gap-1.5 text-[10px] text-muted">
+            批次
+            <input
+              type="number"
+              min={1}
+              max={366}
+              value={batchDays}
+              onChange={e => setBatchDays(Math.max(1, Math.min(366, Number(e.target.value) || 30)))}
+              className="w-14 rounded border border-border bg-base px-1.5 py-0.5 text-xs text-secondary outline-none focus:border-accent"
+            />
+            天/批
+          </label>
+        </div>
         <div className="flex items-center gap-2">
           <DatePicker
             value={backfillStart}
@@ -216,8 +232,8 @@ export function EtfSyncCard() {
         {status?.data_range?.min && (
           <div className="text-[10px] text-muted">
             数据范围: {status.data_range.min} ~ {status.data_range.max ?? '--'}
-            {status.completed_months.length > 0 && (
-              <span className="ml-2">已回填 {status.completed_months.length} 个月</span>
+            {(status.completed_chunks?.length ?? 0) > 0 && (
+              <span className="ml-2">已回填 {status.completed_chunks.length} 批</span>
             )}
           </div>
         )}

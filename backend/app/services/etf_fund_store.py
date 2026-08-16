@@ -23,7 +23,7 @@ INFLOW_SCHEMA = {"code": pl.Utf8, "trade_date": pl.Date,
 _DEFAULT_CONFIG = {"data_source": None, "overlay_index": "000001.SH"}
 _DEFAULT_STATE = {
     "last_sync": None,
-    "completed_months": [],
+    "completed_chunks": [],
     "backfill": {"running": False, "total": 0, "done": 0, "current": None, "error": None},
     "data_range": {"min": None, "max": None},
 }

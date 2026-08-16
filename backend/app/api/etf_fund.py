@@ -29,6 +29,7 @@ class SyncIn(BaseModel):
     mode: str = "incremental"
     start: date | None = None
     end: date | None = None
+    batch_days: int = Field(30, ge=1, le=366)
 
 
 def _etf_symbols(repo) -> set[str]:
@@ -126,7 +127,8 @@ async def post_sync(request: Request, body: SyncIn) -> dict:
         raise HTTPException(422, "backfill 需要 start 和 end")
     try:
         return await etf_fund_sync.trigger(
-            body.mode, request.app.state.repo, body.start, body.end)
+            body.mode, request.app.state.repo, body.start, body.end,
+            body.batch_days)
     except etf_fund_sync.SyncError as e:
         raise HTTPException(e.status, str(e)) from e
 

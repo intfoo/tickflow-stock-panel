@@ -4,7 +4,7 @@
 - auth 复用 (§4.3): _token_from_env 预检 + 401 区分
 - 数据源动态解析: 每次从 yaml 实时取 URL/auth (yaml 由用户显式维护, 不做指纹设卡)
 - 单飞 (§4.5): 模块级 asyncio.Lock, 增量/回填互斥
-- 回填按自然月分批, 可续跑跳过已完成月
+- 回填按 batch_days 天分批 (页面可配), 可续跑跳过已完成批
 """
 from __future__ import annotations
 
@@ -48,23 +48,14 @@ def extract_base_url(url: str) -> str:
     return base.rstrip("/")
 
 
-def _month_ranges(start: date, end: date) -> list[tuple[date, date]]:
-    """按自然月切分 [start, end] 区间。"""
+def _chunk_ranges(start: date, end: date, days: int) -> list[tuple[date, date]]:
+    """按固定天数切分 [start, end] 区间 (回填批次)。"""
     ranges: list[tuple[date, date]] = []
-    cur = date(start.year, start.month, 1)
+    cur = start
     while cur <= end:
-        # 月末
-        if cur.month == 12:
-            next_month = date(cur.year + 1, 1, 1)
-        else:
-            next_month = date(cur.year, cur.month + 1, 1)
-        month_end = next_month - timedelta(days=1)
-
-        seg_start = max(start, cur)
-        seg_end = min(end, month_end)
-        ranges.append((seg_start, seg_end))
-
-        cur = next_month
+        seg_end = min(cur + timedelta(days=days - 1), end)
+        ranges.append((cur, seg_end))
+        cur = seg_end + timedelta(days=1)
     return ranges
 
 
@@ -268,45 +259,47 @@ async def run_incremental(repo) -> dict:
     return {"ok": True}
 
 
-async def run_backfill(repo, start: date, end: date) -> None:
-    """分批回填: 按自然月分批, 续跑跳过 completed_months, 完成后 recompute + 更新 data_range。
+async def run_backfill(repo, start: date, end: date, batch_days: int = 30) -> None:
+    """分批回填: 按 batch_days 天一批, 续跑跳过 completed_chunks, 完成后 recompute + 更新 data_range。
 
-    须持 _lock 调用(经 trigger)。
+    须持 _lock 调用(经 trigger)。批次键为批起始日 ISO, 改批次大小后重叠区间会重拉
+    (merge 去重, 无害)。
     """
     src = resolve_source()
-    months = _month_ranges(start, end)
+    batch_days = max(1, batch_days)
+    chunks = _chunk_ranges(start, end, batch_days)
 
     state = store.load_state()
-    completed = set(state.get("completed_months") or [])
-    pending = [(s, e) for s, e in months if s.strftime("%Y-%m") not in completed]
+    completed = set(state.get("completed_chunks") or [])
+    pending = [(s, e) for s, e in chunks if s.isoformat() not in completed]
 
     state["backfill"] = {
         "running": True,
-        "total": len(months),
-        "done": len(completed),
-        "current": pending[0][0].strftime("%Y-%m") if pending else None,
+        "total": len(chunks),
+        "done": len(chunks) - len(pending),
+        "current": pending[0][0].isoformat() if pending else None,
         "error": None,
     }
     store.save_state(state)
 
     try:
-        for m_start, m_end in pending:
-            month_key = m_start.strftime("%Y-%m")
+        for c_start, c_end in pending:
+            chunk_key = c_start.isoformat()
             state = store.load_state()
-            state["backfill"]["current"] = month_key
+            state["backfill"]["current"] = f"{c_start.isoformat()} ~ {c_end.isoformat()}"
             store.save_state(state)
 
-            share_df = await _fetch_range(src, "/etf/share", m_start, m_end)
+            share_df = await _fetch_range(src, "/etf/share", c_start, c_end)
             if not share_df.is_empty():
                 store.merge_share(share_df)
-            nav_df = await _fetch_range(src, "/etf/nav", m_start, m_end)
+            nav_df = await _fetch_range(src, "/etf/nav", c_start, c_end)
             if not nav_df.is_empty():
                 store.merge_nav(nav_df)
 
             state = store.load_state()
-            completed.add(month_key)
-            state["completed_months"] = sorted(completed)
-            state["backfill"]["done"] = len(completed)
+            completed.add(chunk_key)
+            state["completed_chunks"] = sorted(completed)
+            state["backfill"]["done"] += 1
             store.save_state(state)
 
         etf_fund.recompute_inflow(repo)
@@ -332,7 +325,8 @@ def sync_status() -> dict:
 
 
 async def trigger(
-    mode: str, repo, start: date | None = None, end: date | None = None
+    mode: str, repo, start: date | None = None, end: date | None = None,
+    batch_days: int = 30,
 ) -> dict:
     """单飞触发同步: 运行中 → SyncError(409); 否则后台 create_task。
 
@@ -351,7 +345,7 @@ async def trigger(
             elif mode == "backfill":
                 if start is None or end is None:
                     raise SyncError("backfill 需要 start 和 end", 422)
-                await run_backfill(repo, start, end)
+                await run_backfill(repo, start, end, batch_days)
         except SyncError:
             raise
         except Exception as e:

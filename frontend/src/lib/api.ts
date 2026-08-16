@@ -2548,7 +2548,7 @@ export interface EtfFundConfig {
 
 export interface EtfFundStatus {
   last_sync: string | null
-  completed_months: string[]
+  completed_chunks: string[]
   backfill: { running: boolean; total: number; done: number; current: string | null; error: string | null }
   data_range: { min: string | null; max: string | null }
   configured: boolean
@@ -2598,7 +2598,7 @@ export const etfFundApi = {
       method: 'PUT', body: JSON.stringify({ symbols }),
     }),
   getInstruments: () => request<{ items: EtfInstrumentItem[] }>('/api/etf-fund/instruments'),
-  postSync: (body: { mode: 'incremental' | 'backfill'; start?: string; end?: string }) =>
+  postSync: (body: { mode: 'incremental' | 'backfill'; start?: string; end?: string; batch_days?: number }) =>
     request<{ ok: boolean }>('/api/etf-fund/sync', { method: 'POST', body: JSON.stringify(body) }),
   getStatus: () => request<EtfFundStatus>('/api/etf-fund/status'),
   getLeaderboard: (params: { sort: string; order: 'asc' | 'desc'; page: number; size: number; broad_only: boolean }) =>

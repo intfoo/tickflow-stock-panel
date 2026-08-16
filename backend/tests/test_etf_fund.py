@@ -94,10 +94,10 @@ class TestStore:
 
     def test_state_roundtrip(self):
         st = store.load_state()
-        assert st["backfill"]["running"] is False and st["completed_months"] == []
-        st["completed_months"] = ["2026-07"]
+        assert st["backfill"]["running"] is False and st["completed_chunks"] == []
+        st["completed_chunks"] = ["2026-07-01"]
         store.save_state(st)
-        assert store.load_state()["completed_months"] == ["2026-07"]
+        assert store.load_state()["completed_chunks"] == ["2026-07-01"]
 
 
 class TestCalc:
@@ -285,11 +285,13 @@ class TestSyncHelpers:
         assert sync.extract_base_url("http://127.0.0.1:3021/") == "http://127.0.0.1:3021"
         assert sync.extract_base_url("https://x.com:8443") == "https://x.com:8443"
 
-    def test_month_ranges(self):
-        r = sync._month_ranges(date(2026, 1, 15), date(2026, 3, 10))
-        assert r == [(date(2026, 1, 15), date(2026, 1, 31)),
-                     (date(2026, 2, 1), date(2026, 2, 28)),
-                     (date(2026, 3, 1), date(2026, 3, 10))]
+    def test_chunk_ranges(self):
+        r = sync._chunk_ranges(date(2026, 1, 15), date(2026, 3, 10), 30)
+        assert r == [(date(2026, 1, 15), date(2026, 2, 13)),
+                     (date(2026, 2, 14), date(2026, 3, 10))]
+        # 批次大于区间 → 单批
+        assert sync._chunk_ranges(date(2026, 1, 1), date(2026, 1, 10), 30) == [
+            (date(2026, 1, 1), date(2026, 1, 10))]
 
     def test_resolve_source_unconfigured(self):
         with pytest.raises(sync.SyncError) as ei:
@@ -346,12 +348,12 @@ class TestSyncRun:
         assert store.load_state()["last_sync"] is not None
 
     @pytest.mark.asyncio
-    async def test_backfill_months_resume(self, monkeypatch):
+    async def test_backfill_chunks_resume(self, monkeypatch):
         monkeypatch.setattr(sync, "resolve_source", lambda: {
             "name": "amaz", "base_url": "http://h:3021",
             "headers": {}, "warning": None, "token_env": "TK"})
         st = store.load_state()
-        st["completed_months"] = ["2026-01"]
+        st["completed_chunks"] = ["2026-01-01"]
         store.save_state(st)
         done = []
 
@@ -361,11 +363,11 @@ class TestSyncRun:
 
         monkeypatch.setattr(sync, "_fetch_range", fake_fetch)
         monkeypatch.setattr(sync.etf_fund, "recompute_inflow", lambda repo: None)
-        await sync.run_backfill(None, date(2026, 1, 1), date(2026, 2, 28))
-        # 2026-01 已完成跳过, 只拉 2026-02 (share+nav 各一次)
+        # batch_days=31 → 两批: (01-01~01-31) 已完成跳过, (02-01~02-28) 拉取
+        await sync.run_backfill(None, date(2026, 1, 1), date(2026, 2, 28), batch_days=31)
         assert done == [(date(2026, 2, 1), date(2026, 2, 28)),
                         (date(2026, 2, 1), date(2026, 2, 28))]
-        assert "2026-02" in store.load_state()["completed_months"]
+        assert "2026-02-01" in store.load_state()["completed_chunks"]
         assert store.load_state()["backfill"]["running"] is False
 
 
@@ -404,7 +406,7 @@ class TestApi:
         assert captured["size"] == 100
 
     def test_sync_unconfigured_409(self, monkeypatch):
-        async def fake_trigger(mode, repo, start, end):
+        async def fake_trigger(mode, repo, start, end, batch_days=30):
             raise sync.SyncError("未配置数据源", 409)
         monkeypatch.setattr(etf_api.etf_fund_sync, "trigger", fake_trigger)
         with pytest.raises(Exception) as ei:
