@@ -4,6 +4,7 @@ import { Loader2, RefreshCw, AlertTriangle } from 'lucide-react'
 import { etfFundApi } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
+import { DatePicker } from '@/components/DatePicker'
 
 export function EtfSyncCard() {
   const qc = useQueryClient()
@@ -149,20 +150,16 @@ export function EtfSyncCard() {
       <div className="border-t border-border/50 pt-2 space-y-2">
         <div className="text-xs text-secondary">历史回填</div>
         <div className="flex items-center gap-2">
-          <input
-            type="text"
-            placeholder="YYYY-MM-DD"
+          <DatePicker
             value={backfillStart}
-            onChange={e => setBackfillStart(e.target.value.trim())}
-            className="w-28 rounded border border-border bg-base px-2 py-1 text-xs text-secondary outline-none focus:border-accent placeholder:text-muted/40"
+            onChange={setBackfillStart}
+            max={backfillEnd || undefined}
           />
           <span className="text-xs text-muted">至</span>
-          <input
-            type="text"
-            placeholder="YYYY-MM-DD"
+          <DatePicker
             value={backfillEnd}
-            onChange={e => setBackfillEnd(e.target.value.trim())}
-            className="w-28 rounded border border-border bg-base px-2 py-1 text-xs text-secondary outline-none focus:border-accent placeholder:text-muted/40"
+            onChange={setBackfillEnd}
+            min={backfillStart || undefined}
           />
           <button
             onClick={handleBackfill}
