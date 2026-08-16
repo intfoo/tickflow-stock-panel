@@ -36,10 +36,21 @@ function valColor(v: number | null | undefined): string {
   return v >= 0 ? 'text-bull' : 'text-bear'
 }
 
+/** 从 startIdx 起逐日累加 (之前的点返回 null, 线从可见第一天开始) */
+function cumFrom(amounts: number[], startIdx: number): (number | null)[] {
+  let cum = 0
+  return amounts.map((v, i) => {
+    if (i < startIdx) return null
+    cum = Math.round((cum + v) * 1e4) / 1e4
+    return cum
+  })
+}
+
 export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, onStatDaysChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<echarts.ECharts | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
+  const amountsRef = useRef<number[]>([])
   const ct = useChartTheme()
 
   const overlayName = OVERLAY_INDEXES.find(i => i.symbol === overlayIndex)?.name ?? overlayIndex
@@ -56,17 +67,30 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
     const el = containerRef.current
     if (!el) return
 
+    const series = flow.series
+    const dates = series.map(s => s.trade_date)
+    const amounts = series.map(s => s.amount)
+    amountsRef.current = amounts
+
     let chart = chartRef.current
     if (!chart) {
       chart = echarts.init(el, undefined, { renderer: 'canvas' })
       chartRef.current = chart
       roRef.current = new ResizeObserver(() => chart!.resize())
       roRef.current.observe(el)
+      // 累计净流入从「当前可见窗口第一天」起算: 拖动/缩放 dataZoom 时重算
+      chart.on('dataZoom', () => {
+        const c = chartRef.current
+        if (!c) return
+        const dz = (c.getOption().dataZoom as { start?: number }[] | undefined)?.[0]
+        const start = dz?.start ?? 0
+        const n = amountsRef.current.length
+        if (n === 0) return
+        const startIdx = Math.round((start / 100) * (n - 1))
+        c.setOption({ series: [{ id: 'cum', data: cumFrom(amountsRef.current, startIdx) }] })
+      })
     }
 
-    const series = flow.series
-    const dates = series.map(s => s.trade_date)
-    const amounts = series.map(s => s.amount)
     const overlayRows = overlayQuery.data?.rows ?? []
     const overlayMap = new Map(overlayRows.map(r => [r.date.slice(0, 10), r.close]))
     const overlayData = dates.map(d => overlayMap.get(d) ?? null)
@@ -76,14 +100,11 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
     const inflowNeg = amounts.map(v => (v < 0 ? v : null))
 
     // dataZoom 默认聚焦最近 120 个交易日 (全量数据已加载, 可拖回更早)
-    const zoomStart = dates.length > 120 ? (1 - 120 / dates.length) * 100 : 0
+    const zoomStartIdx = dates.length > 120 ? dates.length - 120 : 0
+    const zoomStart = dates.length > 1 ? (zoomStartIdx / (dates.length - 1)) * 100 : 0
 
-    // 累计净流入: 从图表数据第一天起逐日累加 (亿元, 与柱状共用左轴)
-    let cum = 0
-    const cumulative = amounts.map(v => {
-      cum = Math.round((cum + v) * 1e4) / 1e4
-      return cum
-    })
+    // 累计净流入: 从可见窗口第一天起逐日累加 (亿元, 与柱状共用左轴)
+    const cumulative = cumFrom(amounts, zoomStartIdx)
 
     const option: EChartsOption = {
       animation: false,
@@ -156,6 +177,7 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
           yAxisIndex: 0,
         },
         {
+          id: 'cum',
           name: '累计净流入',
           type: 'line',
           data: cumulative,
