@@ -2,14 +2,13 @@
 
 - base URL 解析 (§4.2): etf→daily→首个 dataset, 截取 scheme://host:port
 - auth 复用 (§4.3): _token_from_env 预检 + 401 区分
-- 指纹防静默切换 (§4.2): source_fingerprint = sha256(base_url + token_env)[:16]
+- 数据源动态解析: 每次从 yaml 实时取 URL/auth (yaml 由用户显式维护, 不做指纹设卡)
 - 单飞 (§4.5): 模块级 asyncio.Lock, 增量/回填互斥
 - 回填按自然月分批, 可续跑跳过已完成月
 """
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from datetime import date, timedelta
 from urllib.parse import urlparse
@@ -49,12 +48,6 @@ def extract_base_url(url: str) -> str:
     return base.rstrip("/")
 
 
-def source_fingerprint(base_url: str, token_env: str | None) -> str:
-    """sha256(base_url + token_env) 前 16 位 hex。"""
-    raw = f"{base_url}|{token_env or ''}"
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-
 def _month_ranges(start: date, end: date) -> list[tuple[date, date]]:
     """按自然月切分 [start, end] 区间。"""
     ranges: list[tuple[date, date]] = []
@@ -89,9 +82,10 @@ def pick_dataset_url(config: CustomSourceConfig) -> str:
 
 
 def resolve_source() -> dict:
-    """解析当前配置的数据源, 返回 {name, base_url, headers, fingerprint, warning}。
+    """解析当前配置的数据源, 返回 {name, base_url, headers, warning, token_env}。
 
-    未配置/已删除/指纹变化 → SyncError(409); token 缺失 → SyncError(401)。
+    每次从 yaml 动态解析, yaml 变更即时生效。
+    未配置/已删除/无 dataset URL → SyncError(409); token 缺失 → SyncError(401)。
     """
     cfg = store.load_config()
     name = cfg.get("data_source")
@@ -120,12 +114,6 @@ def resolve_source() -> dict:
     if len(hosts) > 1:
         warning = f"各 dataset host 不一致 ({', '.join(sorted(hosts))}), 使用优先级最高的"
 
-    # 指纹校验
-    fp = source_fingerprint(base_url, token_env)
-    saved_fp = cfg.get("source_fingerprint")
-    if saved_fp and fp != saved_fp:
-        raise SyncError("数据源配置已变化, 请在页面重新保存", 409)
-
     # token 预检
     token = _token_from_env(token_env)
     if config.auth.type != "none" and not token:
@@ -142,7 +130,6 @@ def resolve_source() -> dict:
         "name": name,
         "base_url": base_url,
         "headers": headers,
-        "fingerprint": fp,
         "warning": warning,
         "token_env": token_env,
     }

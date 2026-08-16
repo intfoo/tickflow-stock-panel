@@ -2541,7 +2541,7 @@ export interface EtfInstrumentItem { symbol: string; name: string }
 export interface EtfFundConfig {
   sources: { name: string; display_name: string }[]
   data_source: string | null
-  source_changed: boolean
+  base_url: string | null
   overlay_index: string
   warning: string | null
 }
@@ -2552,7 +2552,6 @@ export interface EtfFundStatus {
   backfill: { running: boolean; total: number; done: number; current: string | null; error: string | null }
   data_range: { min: string | null; max: string | null }
   configured: boolean
-  source_changed: boolean
 }
 
 export interface EtfLeaderboardRow {

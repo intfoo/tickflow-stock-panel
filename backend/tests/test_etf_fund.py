@@ -84,8 +84,7 @@ class TestStore:
     def test_config_roundtrip_and_defaults(self):
         cfg = store.load_config()
         assert cfg["data_source"] is None and cfg["overlay_index"] == "000001.SH"
-        store.save_config({"data_source": "amaz", "source_fingerprint": "abc",
-                           "overlay_index": "000300.SH"})
+        store.save_config({"data_source": "amaz", "overlay_index": "000300.SH"})
         assert store.load_config()["data_source"] == "amaz"
 
     def test_broad_roundtrip(self):
@@ -286,13 +285,6 @@ class TestSyncHelpers:
         assert sync.extract_base_url("http://127.0.0.1:3021/") == "http://127.0.0.1:3021"
         assert sync.extract_base_url("https://x.com:8443") == "https://x.com:8443"
 
-    def test_fingerprint_stable_and_sensitive(self):
-        a = sync.source_fingerprint("http://h:3021", "TOKEN_A")
-        assert a == sync.source_fingerprint("http://h:3021", "TOKEN_A")
-        assert a != sync.source_fingerprint("http://h:3021", "TOKEN_B")
-        assert a != sync.source_fingerprint("http://h:3022", "TOKEN_A")
-        assert len(a) == 16
-
     def test_month_ranges(self):
         r = sync._month_ranges(date(2026, 1, 15), date(2026, 3, 10))
         assert r == [(date(2026, 1, 15), date(2026, 1, 31)),
@@ -305,28 +297,18 @@ class TestSyncHelpers:
         assert ei.value.status == 409
 
     def test_resolve_source_deleted(self, monkeypatch):
-        store.save_config({"data_source": "ghost", "source_fingerprint": "x"})
+        store.save_config({"data_source": "ghost"})
         monkeypatch.setattr(sync.loader, "get_provider",
                             lambda name: (_ for _ in ()).throw(ValueError("nf")))
         with pytest.raises(sync.SyncError) as ei:
             sync.resolve_source()
         assert ei.value.status == 409 and "已删除" in ei.value.args[0]
 
-    def test_resolve_source_fingerprint_changed(self, monkeypatch):
-        cfg = _fake_provider_config(url="http://h:3021/api/daily", token_env="TK")
-        monkeypatch.setattr(sync.loader, "get_provider", lambda name: _FakeProvider(cfg))
-        store.save_config({"data_source": "amaz",
-                           "source_fingerprint": sync.source_fingerprint("http://h:9999", "TK")})
-        with pytest.raises(sync.SyncError) as ei:
-            sync.resolve_source()
-        assert ei.value.status == 409 and "已变化" in ei.value.args[0]
-
     def test_resolve_source_token_missing(self, monkeypatch):
         cfg = _fake_provider_config(url="http://h:3021/api/daily", token_env="TK_MISSING")
         monkeypatch.setattr(sync.loader, "get_provider", lambda name: _FakeProvider(cfg))
         monkeypatch.setattr(sync, "_token_from_env", lambda name: None)
-        store.save_config({"data_source": "amaz",
-                           "source_fingerprint": sync.source_fingerprint("http://h:3021", "TK_MISSING")})
+        store.save_config({"data_source": "amaz"})
         with pytest.raises(sync.SyncError) as ei:
             sync.resolve_source()
         assert ei.value.status == 401 and "TK_MISSING" in ei.value.args[0]
@@ -335,8 +317,7 @@ class TestSyncHelpers:
         cfg = _fake_provider_config_multi()
         monkeypatch.setattr(sync.loader, "get_provider", lambda name: _FakeProvider(cfg))
         monkeypatch.setattr(sync, "_token_from_env", lambda name: "tok")
-        fp = sync.source_fingerprint("http://etf-host:3021", "TK")
-        store.save_config({"data_source": "amaz", "source_fingerprint": fp})
+        store.save_config({"data_source": "amaz"})
         out = sync.resolve_source()
         assert out["base_url"] == "http://etf-host:3021"
         assert out["headers"] == {"Authorization": "Bearer tok"}
@@ -348,8 +329,7 @@ class TestSyncRun:
     async def test_incremental_merges_and_recomputes(self, monkeypatch):
         monkeypatch.setattr(sync, "resolve_source", lambda: {
             "name": "amaz", "base_url": "http://h:3021",
-            "headers": {}, "fingerprint": "fp", "warning": None,
-            "token_env": "TK"})
+            "headers": {}, "warning": None, "token_env": "TK"})
         calls = []
 
         async def fake_fetch(src, path, start, end):
@@ -369,8 +349,7 @@ class TestSyncRun:
     async def test_backfill_months_resume(self, monkeypatch):
         monkeypatch.setattr(sync, "resolve_source", lambda: {
             "name": "amaz", "base_url": "http://h:3021",
-            "headers": {}, "fingerprint": "fp", "warning": None,
-            "token_env": "TK"})
+            "headers": {}, "warning": None, "token_env": "TK"})
         st = store.load_state()
         st["completed_months"] = ["2026-01"]
         store.save_state(st)

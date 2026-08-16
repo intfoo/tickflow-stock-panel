@@ -57,17 +57,16 @@ def _config_payload(request: Request) -> dict:
     cfg = store.load_config()
     sources = [{"name": s["name"], "display_name": s["display_name"]}
                for s in loader.list_sources()]
-    changed, warning = False, None
+    base_url, warning = None, None
     if cfg["data_source"]:
         try:
             src = etf_fund_sync.resolve_source()
-            changed = src["fingerprint"] != (cfg["source_fingerprint"] or "")
+            base_url = src["base_url"]
             warning = src["warning"]
         except etf_fund_sync.SyncError as e:
-            changed = e.status == 409 and "已变化" in str(e)
             warning = str(e)
     return {"sources": sources, "data_source": cfg["data_source"],
-            "source_changed": changed, "overlay_index": cfg["overlay_index"],
+            "base_url": base_url, "overlay_index": cfg["overlay_index"],
             "warning": warning}
 
 
@@ -80,14 +79,11 @@ def get_config(request: Request) -> dict:
 def put_config(request: Request, body: ConfigIn) -> dict:
     from app.data_providers.custom import loader
     try:
-        provider = loader.get_provider(body.data_source)
+        loader.get_provider(body.data_source)
     except ValueError:
         raise HTTPException(404, f"数据源不存在: {body.data_source}") from None
-    base = etf_fund_sync.extract_base_url(etf_fund_sync.pick_dataset_url(provider.config))
-    token_env = provider.config.auth.token_env
     store.save_config({
         "data_source": body.data_source,
-        "source_fingerprint": etf_fund_sync.source_fingerprint(base, token_env),
         **({"overlay_index": body.overlay_index} if body.overlay_index else {}),
     })
     return _config_payload(request)
@@ -140,11 +136,6 @@ def get_status(request: Request) -> dict:
     cfg = store.load_config()
     out = etf_fund_sync.sync_status()
     out["configured"] = bool(cfg["data_source"])
-    try:
-        src = etf_fund_sync.resolve_source()
-        out["source_changed"] = src["fingerprint"] != (cfg["source_fingerprint"] or "")
-    except etf_fund_sync.SyncError:
-        out["source_changed"] = False
     return out
 
 

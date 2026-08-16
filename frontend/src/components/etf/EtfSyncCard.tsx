@@ -27,7 +27,6 @@ export function EtfSyncCard() {
   const config = configQuery.data
   const status = statusQuery.data
   const configured = !!config?.data_source
-  const sourceChanged = !!config?.source_changed
 
   const saveConfigMutation = useMutation({
     mutationFn: (name: string) => etfFundApi.putConfig({ data_source: name }),
@@ -62,10 +61,6 @@ export function EtfSyncCard() {
       return
     }
     syncMutation.mutate({ mode: 'backfill', start: backfillStart, end: backfillEnd })
-  }
-
-  const handleResave = () => {
-    if (config?.data_source) saveConfigMutation.mutate(config.data_source)
   }
 
   const backfillRunning = status?.backfill?.running ?? false
@@ -124,23 +119,15 @@ export function EtfSyncCard() {
           ))}
         </select>
       </div>
-
-      {sourceChanged && (
-        <div className="flex items-center gap-1.5 rounded bg-warning/10 px-2 py-1 text-[10px] text-warning">
-          <AlertTriangle className="h-3 w-3 shrink-0" />
-          <span className="flex-1">数据源配置已变化（URL/认证与保存时不一致）</span>
-          <button
-            onClick={handleResave}
-            disabled={saveConfigMutation.isPending}
-            className="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 font-medium hover:bg-warning/30 disabled:opacity-50"
-          >
-            重新保存
-          </button>
-        </div>
+      {config?.base_url && (
+        <div className="text-[10px] text-muted/60">将调用 {config.base_url}/etf/share · /etf/nav</div>
       )}
 
-      {config?.warning && !config.warning.includes('已变化') && (
-        <div className="text-[10px] text-warning/80">{config.warning}</div>
+      {config?.warning && (
+        <div className="flex items-center gap-1.5 rounded bg-warning/10 px-2 py-1 text-[10px] text-warning">
+          <AlertTriangle className="h-3 w-3 shrink-0" />
+          <span>{config.warning}</span>
+        </div>
       )}
 
       {/* 增量同步 */}

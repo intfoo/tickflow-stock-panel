@@ -20,7 +20,7 @@ NAV_SCHEMA = {"code": pl.Utf8, "trade_date": pl.Date, "nav": pl.Float64}
 INFLOW_SCHEMA = {"code": pl.Utf8, "trade_date": pl.Date,
                  "inflow_share": pl.Float64, "inflow_amount": pl.Float64}
 
-_DEFAULT_CONFIG = {"data_source": None, "source_fingerprint": None, "overlay_index": "000001.SH"}
+_DEFAULT_CONFIG = {"data_source": None, "overlay_index": "000001.SH"}
 _DEFAULT_STATE = {
     "last_sync": None,
     "completed_months": [],
@@ -44,7 +44,7 @@ def _read(path: Path, schema: dict) -> pl.DataFrame:
         return _empty(schema)
     try:
         return pl.read_parquet(path)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("etf_fund read %s failed: %s", path, e)
         return _empty(schema)
 
@@ -97,7 +97,7 @@ def _read_json(path: Path, default: dict) -> dict:
         return json.loads(json.dumps(default))
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return json.loads(json.dumps(default))
     merged = json.loads(json.dumps(default))
     merged.update(data)
@@ -122,6 +122,7 @@ def load_config() -> dict:
 def save_config(cfg: dict) -> None:
     merged = load_config()
     merged.update(cfg)
+    merged.pop("source_fingerprint", None)  # 清理历史遗留字段 (指纹机制已移除)
     _write_json(data_dir() / "config.json", merged)
 
 
@@ -131,7 +132,7 @@ def load_broad() -> list[str]:
         return []
     try:
         return list(json.loads(path.read_text(encoding="utf-8")))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
 
 
