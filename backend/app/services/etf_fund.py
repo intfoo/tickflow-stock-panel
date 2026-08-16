@@ -27,22 +27,35 @@ _INFLOW_WINDOWS = {"inflow_1d": 1, "inflow_5d": 5, "inflow_20d": 20, "inflow_60d
 _ENRICHED_SCAN_DAYS = 130  # 分区数, 覆盖 60 交易日窗口 + 余量
 
 
+def _etf_enriched_dates() -> list[date]:
+    """ETF enriched 分区目录名即交易日 (不读 parquet, 廉价且不受扫描分区数限制)。"""
+    base = settings.data_dir / "kline_etf_enriched"
+    if not base.exists():
+        return []
+    out: list[date] = []
+    for p in base.glob("date=*"):
+        try:
+            out.append(date.fromisoformat(p.name[5:]))
+        except ValueError:
+            continue
+    return out
+
+
 def trading_calendar(repo, start: date, end: date) -> list[date]:
-    """交易日历: 指数日K(上证指数)优先 → etf enriched scan → 份额/净值自身日期并集。"""
+    """交易日历: 指数日K ∪ ETF enriched 分区 ∪ 份额/净值自身日期的**并集**。
+
+    各来源均只含真实交易日; 并集保证任一来源 stale/缺失都不截断日历
+    (曾现: 本地指数日K 停在 07-28, 之后 share 变动 join 不到 nav → amount 全 null)。
+    """
+    dates: set[date] = set()
     if repo is not None:
         try:
             df = repo.get_index_daily("000001.SH", start, end, ["date"])
             if not df.is_empty() and "date" in df.columns:
-                return sorted(df["date"].to_list())
+                dates.update(df["date"].to_list())
         except Exception as e:
-            logger.debug("index calendar fallback: %s", e)
-    try:
-        df = _scan_etf_enriched(start, end, ["date"])
-        if not df.is_empty():
-            return sorted(df["date"].unique().to_list())
-    except Exception:
-        pass
-    dates: set[date] = set()
+            logger.debug("index calendar source failed: %s", e)
+    dates.update(_etf_enriched_dates())
     for df in (store.read_share(), store.read_nav()):
         if not df.is_empty():
             dates.update(df["trade_date"].to_list())
@@ -218,10 +231,10 @@ def fund_flow(repo, days: int) -> dict:
     empty_stats = {"yesterday": None, "d5": None, "d20": None, "d60": None,
                    "data_end_date": None}
     if inflow.is_empty() or not broad:
-        return {"series": [], "stats": empty_stats}
+        return {"series": [], "stats": empty_stats, "broad_count": len(broad)}
     inflow = inflow.filter(pl.col("code").is_in(list(broad)))
     if inflow.is_empty():
-        return {"series": [], "stats": empty_stats}
+        return {"series": [], "stats": empty_stats, "broad_count": len(broad)}
     end = inflow["trade_date"].max()
     start = end - timedelta(days=max(days, 60) * 2 + 30)
     cal = [d for d in trading_calendar(repo, start, end) if d <= end]
@@ -250,4 +263,4 @@ def fund_flow(repo, days: int) -> dict:
     stats = {"yesterday": round(vals[-1], 4) if vals else None,
              "d5": _tail(5), "d20": _tail(20), "d60": _tail(60),
              "data_end_date": end.isoformat()}
-    return {"series": series, "stats": stats}
+    return {"series": series, "stats": stats, "broad_count": len(broad)}

@@ -200,7 +200,23 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
       <div className="mb-1 px-1 text-[10px] text-muted">
         数据截至 {stats.data_end_date ?? '--'}
       </div>
-      <div ref={containerRef} style={{ width: '100%', height: 360 }} />
+      {flow.series.length === 0 ? (
+        <div className="flex h-[360px] flex-col items-center justify-center gap-1 text-xs text-muted">
+          {flow.broad_count === 0 ? (
+            <>
+              <span>尚未配置宽基 ETF</span>
+              <span className="text-[10px] text-muted/60">请点击右上角「宽基配置」勾选宽基 ETF，资金流图按宽基申购净流入合计展示</span>
+            </>
+          ) : (
+            <>
+              <span>暂无净流入数据</span>
+              <span className="text-[10px] text-muted/60">请先在「数据同步」中回填份额/净值数据</span>
+            </>
+          )}
+        </div>
+      ) : (
+        <div ref={containerRef} style={{ width: '100%', height: 360 }} />
+      )}
     </div>
   )
 }

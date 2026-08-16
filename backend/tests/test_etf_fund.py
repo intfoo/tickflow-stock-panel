@@ -159,6 +159,7 @@ class TestFlow:
         cal = CAL  # 8-3 .. 8-10
         monkeypatch.setattr(etf_fund, "trading_calendar", lambda repo, s, e: cal)
         out = etf_fund.fund_flow(repo=None, days=60)
+        assert out["broad_count"] == 2
         series = {r["trade_date"]: r["amount"] for r in out["series"]}
         # 8-5: B1 20万=0.002亿; 8-6: B1+B2=12万=0.0012亿; X 不计
         assert abs(series["2026-08-05"] - 0.002) < 1e-9
@@ -171,6 +172,24 @@ class TestFlow:
         monkeypatch.setattr(etf_fund, "trading_calendar", lambda repo, s, e: CAL)
         out = etf_fund.fund_flow(repo=None, days=60)
         assert out["series"] == [] and out["stats"]["data_end_date"] is None
+        assert out["broad_count"] == 0
+
+
+class TestCalendar:
+    def test_calendar_union_covers_stale_index(self):
+        """指数日K stale (停在 07-28) 时, share/nav 自身日期仍补齐日历尾部。
+
+        回归: 日历截断曾导致尾部 share 变动 join 不到 nav, inflow_amount 全 null。
+        """
+
+        class _Repo:
+            def get_index_daily(self, symbol, start, end, columns=None):
+                return pl.DataFrame({"date": [date(2026, 7, 27), date(2026, 7, 28)]})
+
+        store.merge_share(_share_df([("A", date(2026, 8, 14), 100.0, date(2026, 8, 15))]))
+        cal = etf_fund.trading_calendar(_Repo(), date(2026, 7, 1), date(2026, 8, 16))
+        assert cal[0] == date(2026, 7, 27)
+        assert cal[-1] == date(2026, 8, 14)  # 不被指数 stale 截断
 
 
 class TestLeaderboard:

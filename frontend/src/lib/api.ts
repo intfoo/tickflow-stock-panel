@@ -2586,6 +2586,7 @@ export interface EtfFlowResult {
     d60: number | null
     data_end_date: string | null
   }
+  broad_count: number
 }
 
 export const etfFundApi = {

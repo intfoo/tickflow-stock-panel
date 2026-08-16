@@ -143,7 +143,9 @@ async def _fetch_range(
         if delay:
             await asyncio.sleep(delay)
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
+            # 全量 ETF 大区间上游计算 35~72s + 30万行 JSON 传输, 60s 会 ReadTimeout
+            # 引发重试 (同一区间重复请求, 上游靠结果缓存兜底)。300s 与项目 MAX_TIMEOUT 对齐。
+            async with httpx.AsyncClient(timeout=300) as client:
                 resp = await client.post(url, json=body, headers=headers)
         except httpx.HTTPError as e:
             last_exc = e
