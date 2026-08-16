@@ -191,9 +191,12 @@ def flow(request: Request, days: int = Query(120, ge=5, le=750)) -> dict:
     return etf_fund.fund_flow(request.app.state.repo, days)
 
 
-def register(app) -> None:
-    """lifespan 内调用: 注册路由 + 每日增量同步 cron (须在 start_scheduler 之后)。"""
-    app.include_router(router)
+def register_jobs(app) -> None:
+    """lifespan 内调用: 注册每日增量同步 cron (须在 start_scheduler 之后)。
+
+    路由在 main.py 模块级 include_router (必须在 spa_fallback 之前,
+    否则 GET 会被 @app.get("/{full_path:path}") 兜底吞掉; POST 因方法不匹配免疫)。
+    """
     scheduler = getattr(app.state, "scheduler", None)
     if scheduler is None:
         logger.warning("etf_fund: scheduler 不可用, 跳过每日同步 cron")

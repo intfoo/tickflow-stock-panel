@@ -101,11 +101,12 @@ async def lifespan(app: FastAPI):
         logger.warning("scheduler not started: %s", e)
         app.state.scheduler = None
 
-    # ETF 份额/资金独立模块 (fork 私有): 注册 /api/etf-fund 路由 + 每日增量同步 cron。
+    # ETF 份额/资金独立模块 (fork 私有): 注册每日增量同步 cron。
     # 须在 start_scheduler 之后 (依赖 app.state.scheduler)。
+    # 路由注册在模块级 spa_fallback 之前 (见下方路由区)。
     try:
         from app.api import etf_fund as etf_fund_api
-        etf_fund_api.register(app)
+        etf_fund_api.register_jobs(app)
     except Exception as e:  # noqa: BLE001
         logger.warning("etf_fund init failed (不影响启动): %s", e)
 
@@ -362,6 +363,12 @@ app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
+
+# ETF 份额/资金模块路由 (fork 私有)。必须在下方 spa_fallback (/{full_path:path})
+# 之前注册——否则 GET /api/etf-fund/* 会被兜底捕获返回 index.html
+# (POST 因方法不匹配免疫, 该 bug 曾致 GET 全部落空而回填正常)。
+from app.api import etf_fund as etf_fund_api  # noqa: E402
+app.include_router(etf_fund_api.router)
 
 
 # 能力门控异常 → 403(而非默认 500)
