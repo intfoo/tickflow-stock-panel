@@ -44,10 +44,10 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
 
   const overlayName = OVERLAY_INDEXES.find(i => i.symbol === overlayIndex)?.name ?? overlayIndex
 
-  // 拉叠加指数日K
+  // 拉叠加指数日K (与 flow 全量窗口对齐)
   const overlayQuery = useQuery({
     queryKey: ['etf-fund', 'overlay-index', overlayIndex] as const,
-    queryFn: () => api.klineDaily(overlayIndex, 300),
+    queryFn: () => api.klineDaily(overlayIndex, 750),
     placeholderData: keepPreviousData,
     staleTime: 5 * 60_000,
   })
@@ -74,6 +74,9 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
     // 拆两个堆叠系列, 图例红/绿与柱体精确一致 (单系列逐点上色时图例只能取默认色)
     const inflowPos = amounts.map(v => (v >= 0 ? v : null))
     const inflowNeg = amounts.map(v => (v < 0 ? v : null))
+
+    // dataZoom 默认聚焦最近 120 个交易日 (全量数据已加载, 可拖回更早)
+    const zoomStart = dates.length > 120 ? (1 - 120 / dates.length) * 100 : 0
 
     const option: EChartsOption = {
       animation: false,
@@ -124,8 +127,9 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
         },
       ],
       dataZoom: [
-        { type: 'inside', start: 0, end: 100 },
-        { type: 'slider', height: 18, bottom: 4, brushSelect: false, dataBackground: { lineStyle: { color: ct.border }, areaStyle: { color: ct.zoomFill } } },
+        // 默认窗口聚焦最近 120 个交易日, 拖滑块/滚轮可回看全部已同步历史
+        { type: 'inside', start: zoomStart, end: 100 },
+        { type: 'slider', height: 18, bottom: 4, brushSelect: false, start: zoomStart, end: 100, dataBackground: { lineStyle: { color: ct.border }, areaStyle: { color: ct.zoomFill } } },
       ],
       series: [
         {

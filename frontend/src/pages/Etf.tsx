@@ -32,10 +32,10 @@ export function Etf() {
     }
   }, [configOverlay]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 资金流数据
+  // 资金流数据 — 全量加载 (API 上限 750 交易日 ≈ 3 年), dataZoom 默认聚焦最近 120 天
   const flowQuery = useQuery({
-    queryKey: QK.etfFundFlow(120),
-    queryFn: () => etfFundApi.getFlow(120),
+    queryKey: QK.etfFundFlow(750),
+    queryFn: () => etfFundApi.getFlow(750),
     enabled: configured,
   })
 
