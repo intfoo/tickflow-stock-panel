@@ -216,9 +216,17 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
       {flow.series.length === 0 ? (
         <div className="flex h-[360px] flex-col items-center justify-center gap-1 text-xs text-muted">
           {flow.broad_count === 0 ? (
-            <>
-              <span>宽基清单为空（已主动清空），请到「宽基配置」重新选择</span>
-            </>
+            flow.is_default ? (
+              <>
+                <span>ETF 维表为空</span>
+                <span className="text-[10px] text-muted/60">请先在「数据」页同步 ETF 标的与日K</span>
+              </>
+            ) : (
+              <>
+                <span>宽基清单为空（已主动清空）</span>
+                <span className="text-[10px] text-muted/60">请到「宽基配置」重新选择，或点「恢复默认」</span>
+              </>
+            )
           ) : (
             <>
               <span>暂无净流入数据，请先在「数据同步」中回填</span>

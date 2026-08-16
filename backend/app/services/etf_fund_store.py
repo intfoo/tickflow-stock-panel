@@ -149,6 +149,8 @@ def load_broad() -> dict:
         return json.loads(json.dumps(_DEFAULT_BROAD))
     out = json.loads(json.dumps(_DEFAULT_BROAD))
     out.update(data)
+    if not isinstance(out.get("symbols"), list):  # 手动编辑出 null/脏值时兜底
+        out["symbols"] = []
     return out
 
 

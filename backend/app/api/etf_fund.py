@@ -144,7 +144,9 @@ def get_instruments(request: Request) -> dict:
     else:
         out = out.with_columns(pl.lit(None, dtype=pl.Float64).alias("market_cap"))
     out = out.with_columns(pl.col("market_cap").round(2))
-    return {"items": out.to_dicts()}
+    # 只暴露契约列, 防止 join 引入的 share/nav/code 等内部字段泄出
+    keep = [c for c in ["symbol", "name", "market_cap"] if c in out.columns]
+    return {"items": out.select(keep).to_dicts()}
 
 
 @router.post("/sync")

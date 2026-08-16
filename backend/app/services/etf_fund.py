@@ -146,7 +146,7 @@ def _window_agg(inflow: pl.DataFrame, cal: list[date], days: int) -> pl.DataFram
 def _latest_share_nav() -> pl.DataFrame:
     """每 code 最新 share 与 nav (各自 forward_fill 后取 last, 对齐到同日期)。
 
-    返回列: code, share (亿份), nav。无资金数据时返回空表 (仅 schema)。
+    返回列: code, share (万份, 原始单位), nav (元)。无资金数据时返回空表 (仅 schema)。
     供 leaderboard_rows 与 GET /instruments 共用。
     """
     share, nav = store.read_share(), store.read_nav()
