@@ -165,7 +165,9 @@ class TestFlow:
         # 8-5: B1 20万=0.002亿; 8-6: B1+B2=12万=0.0012亿; X 不计
         assert abs(series["2026-08-05"] - 0.002) < 1e-9
         assert abs(series["2026-08-06"] - 0.0012) < 1e-9
-        assert series["2026-08-04"] == 0.0  # 历史缺失日补 0
+        # 起点 = 最早数据日 (8-5), 之前的日历日 (8-3/8-4) 属未知区间不补 0
+        assert out["series"][0]["trade_date"] == "2026-08-05"
+        assert "2026-08-04" not in series
         assert out["stats"]["data_end_date"] == "2026-08-06"
         assert out["series"][-1]["trade_date"] == "2026-08-06"  # 尾部不补 0, 截到数据日
 

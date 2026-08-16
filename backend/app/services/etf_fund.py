@@ -250,8 +250,9 @@ def fund_flow(repo, days: int) -> dict:
         return {"series": [], "stats": empty_stats, "broad_count": len(broad),
                 "is_default": is_default}
     end = inflow["trade_date"].max()
+    data_start = inflow["trade_date"].min()  # 序列起点=最早资金数据日, 之前属未知不补 0
     start = end - timedelta(days=max(days, 60) * 2 + 30)
-    cal = [d for d in trading_calendar(repo, start, end) if d <= end]
+    cal = [d for d in trading_calendar(repo, start, end) if data_start <= d <= end]
     daily = (
         inflow.group_by("trade_date")
         .agg(pl.col("inflow_amount").sum() / 1e4)  # 万元→亿元
