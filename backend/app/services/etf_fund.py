@@ -14,6 +14,7 @@ import polars as pl
 
 from app.config import settings
 from app.services import etf_fund_store as store
+from app.services.etf_broad_presets import effective_broad
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ def _etf_enriched_dates() -> list[date]:
 
 
 def trading_calendar(repo, start: date, end: date) -> list[date]:
-    """交易日历: 指数日K ∪ ETF enriched 分区 ∪ 份额/净值自身日期的**并集**。
+    """交易日历: 指数日K + ETF enriched 分区 + 份额/净值自身日期的**并集**。
 
     各来源均只含真实交易日; 并集保证任一来源 stale/缺失都不截断日历
     (曾现: 本地指数日K 停在 07-28, 之后 share 变动 join 不到 nav → amount 全 null)。
@@ -142,7 +143,38 @@ def _window_agg(inflow: pl.DataFrame, cal: list[date], days: int) -> pl.DataFram
     )
 
 
-def leaderboard_rows(repo, broad: set[str], sort: str, order: str,
+def _latest_share_nav() -> pl.DataFrame:
+    """每 code 最新 share 与 nav (各自 forward_fill 后取 last, 对齐到同日期)。
+
+    返回列: code, share (亿份), nav。无资金数据时返回空表 (仅 schema)。
+    供 leaderboard_rows 与 GET /instruments 共用。
+    """
+    share, nav = store.read_share(), store.read_nav()
+    if share.is_empty() and nav.is_empty():
+        return pl.DataFrame(schema={"code": pl.Utf8, "share": pl.Float64, "nav": pl.Float64})
+    share_sel = share.select(["code", "trade_date", "share"]) if not share.is_empty() else None
+    nav_sel = nav.select(["code", "trade_date", "nav"]) if not nav.is_empty() else None
+    if share_sel is not None and nav_sel is not None:
+        combined = share_sel.join(nav_sel, on=["code", "trade_date"], how="full", coalesce=True)
+    elif share_sel is not None:
+        combined = share_sel.with_columns(pl.lit(None, dtype=pl.Float64).alias("nav"))
+    else:
+        combined = nav_sel.with_columns(pl.lit(None, dtype=pl.Float64).alias("share"))
+    return (
+        combined.sort(["code", "trade_date"])
+        .with_columns([
+            pl.col("share").forward_fill().over("code"),
+            pl.col("nav").forward_fill().over("code"),
+        ])
+        .group_by("code", maintain_order=True)
+        .agg([
+            pl.col("share").last().alias("share"),
+            pl.col("nav").last().alias("nav"),
+        ])
+    )
+
+
+def leaderboard_rows(repo, sort: str, order: str,
                      page: int, size: int, broad_only: bool) -> dict:
     quotes = _load_quotes()
     if quotes.is_empty():
@@ -167,43 +199,22 @@ def leaderboard_rows(repo, broad: set[str], sort: str, order: str,
     end = date.today()
     cal = trading_calendar(repo, end - timedelta(days=400), end)
     inflow = store.read_inflow()
-    share, nav = store.read_share(), store.read_nav()
     fund = agg.select("symbol")
     for col, days in _INFLOW_WINDOWS.items():
         w = _window_agg(inflow, cal, days)
         fund = fund.join(w, left_on="symbol", right_on="code", how="left")
         fund = fund.rename({"total": col})
-    # 份额/市值: share/nav 按 (code, trade_date) union 后排序,
-    # 两列各自 forward_fill().over("code"), 再 group_by 取最后非 null 的 share 与 nav
-    # (两列 ffill 到同一日期=两序列最大日期), 相乘得 market_cap
-    if share.is_empty() and nav.is_empty():
+    # 份额/市值: 复用 _latest_share_nav (share/nav 双 ffill 到同日期)
+    sn = _latest_share_nav()
+    if sn.is_empty():
         fund = fund.with_columns([
             pl.lit(None, dtype=pl.Float64).alias("share"),
             pl.lit(None, dtype=pl.Float64).alias("nav"),
         ])
     else:
-        # union share+nav 的 (code, trade_date)
-        share_sel = share.select(["code", "trade_date", "share"]) if not share.is_empty() else None
-        nav_sel = nav.select(["code", "trade_date", "nav"]) if not nav.is_empty() else None
-        if share_sel is not None and nav_sel is not None:
-            combined = share_sel.join(nav_sel, on=["code", "trade_date"], how="full", coalesce=True)
-        elif share_sel is not None:
-            combined = share_sel.with_columns(pl.lit(None, dtype=pl.Float64).alias("nav"))
-        else:
-            combined = nav_sel.with_columns(pl.lit(None, dtype=pl.Float64).alias("share"))
-        combined = (
-            combined.sort(["code", "trade_date"])
-            .with_columns([
-                pl.col("share").forward_fill().over("code"),
-                pl.col("nav").forward_fill().over("code"),
-            ])
-            .group_by("code", maintain_order=True)
-            .agg([
-                pl.col("share").last().alias("share"),
-                pl.col("nav").last().alias("nav"),
-            ])
-        )
-        fund = fund.join(combined, left_on="symbol", right_on="code", how="left")
+        fund = fund.join(sn, left_on="symbol", right_on="code", how="left")
+    instruments = repo.get_etf_instruments() if repo is not None else None
+    broad, _ = effective_broad(instruments)
     out = agg.join(fund, on="symbol", how="left").with_columns([
         (pl.col("share") / 1e4).alias("share"),          # 万份→亿份
         (pl.col("share") * pl.col("nav") / 1e4).alias("market_cap"),  # 万元→亿元
@@ -226,15 +237,18 @@ def leaderboard_rows(repo, broad: set[str], sort: str, order: str,
 
 
 def fund_flow(repo, days: int) -> dict:
-    broad = set(store.load_broad())
+    instruments = repo.get_etf_instruments() if repo is not None else None
+    broad, is_default = effective_broad(instruments)
     inflow = store.read_inflow()
     empty_stats = {"yesterday": None, "d5": None, "d20": None, "d60": None,
                    "data_end_date": None}
     if inflow.is_empty() or not broad:
-        return {"series": [], "stats": empty_stats, "broad_count": len(broad)}
+        return {"series": [], "stats": empty_stats, "broad_count": len(broad),
+                "is_default": is_default}
     inflow = inflow.filter(pl.col("code").is_in(list(broad)))
     if inflow.is_empty():
-        return {"series": [], "stats": empty_stats, "broad_count": len(broad)}
+        return {"series": [], "stats": empty_stats, "broad_count": len(broad),
+                "is_default": is_default}
     end = inflow["trade_date"].max()
     start = end - timedelta(days=max(days, 60) * 2 + 30)
     cal = [d for d in trading_calendar(repo, start, end) if d <= end]
@@ -263,4 +277,5 @@ def fund_flow(repo, days: int) -> dict:
     stats = {"yesterday": round(vals[-1], 4) if vals else None,
              "d5": _tail(5), "d20": _tail(20), "d60": _tail(60),
              "data_end_date": end.isoformat()}
-    return {"series": series, "stats": stats, "broad_count": len(broad)}
+    return {"series": series, "stats": stats, "broad_count": len(broad),
+            "is_default": is_default}

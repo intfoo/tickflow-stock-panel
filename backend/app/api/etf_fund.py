@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.services import etf_fund, etf_fund_sync
 from app.services import etf_fund_store as store
+from app.services.etf_broad_presets import effective_broad, preset_symbols
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +91,23 @@ def put_config(request: Request, body: ConfigIn) -> dict:
     return _config_payload(request)
 
 
+def _broad_payload(request: Request) -> dict:
+    repo = request.app.state.repo
+    instruments = repo.get_etf_instruments() if repo is not None else None
+    symbols, is_default = effective_broad(instruments)
+    names = _etf_name_map(repo)
+    sorted_syms = sorted(symbols)
+    return {
+        "symbols": sorted_syms,
+        "is_default": is_default,
+        "items": [{"symbol": s, "name": names.get(s, s)} for s in sorted_syms],
+        "presets": [{"symbol": s, "name": names.get(s, s)} for s in preset_symbols(instruments)],
+    }
+
+
 @router.get("/broad")
 def get_broad(request: Request) -> dict:
-    symbols = store.load_broad()
-    names = _etf_name_map(request.app.state.repo)
-    return {"symbols": symbols,
-            "items": [{"symbol": s, "name": names.get(s, s)} for s in symbols]}
+    return _broad_payload(request)
 
 
 @router.put("/broad")
@@ -106,7 +118,13 @@ def put_broad(request: Request, body: BroadIn) -> dict:
         if bad:
             raise HTTPException(422, f"非 ETF 代码: {', '.join(bad[:5])}")
     store.save_broad(body.symbols)
-    return get_broad(request)
+    return _broad_payload(request)
+
+
+@router.post("/broad/reset")
+def reset_broad(request: Request) -> dict:
+    store.reset_broad()
+    return _broad_payload(request)
 
 
 @router.get("/instruments")
@@ -116,7 +134,17 @@ def get_instruments(request: Request) -> dict:
     if df is None or df.is_empty():
         return {"items": []}
     cols = [c for c in ["symbol", "name"] if c in df.columns]
-    return {"items": df.select(cols).sort("symbol").to_dicts()}
+    out = df.select(cols).sort("symbol")
+    sn = etf_fund._latest_share_nav()
+    if not sn.is_empty():
+        out = out.join(sn, left_on="symbol", right_on="code", how="left")
+        out = out.with_columns(
+            (pl.col("share") * pl.col("nav") / 1e4).alias("market_cap")  # 万元→亿元
+        )
+    else:
+        out = out.with_columns(pl.lit(None, dtype=pl.Float64).alias("market_cap"))
+    out = out.with_columns(pl.col("market_cap").round(2))
+    return {"items": out.to_dicts()}
 
 
 @router.post("/sync")
@@ -152,7 +180,7 @@ def leaderboard(
 ) -> dict:
     size = min(size, 100)
     return etf_fund.leaderboard_rows(
-        request.app.state.repo, set(store.load_broad()),
+        request.app.state.repo,
         sort, order, page, size, broad_only)
 
 

@@ -88,9 +88,10 @@ class TestStore:
         assert store.load_config()["data_source"] == "amaz"
 
     def test_broad_roundtrip(self):
-        assert store.load_broad() == []
+        assert store.load_broad() == {"symbols": [], "customized": False}
         store.save_broad(["510300.SH", "510500.SH"])
-        assert store.load_broad() == ["510300.SH", "510500.SH"]
+        assert store.load_broad() == {"symbols": ["510300.SH", "510500.SH"],
+                                       "customized": True}
 
     def test_state_roundtrip(self):
         st = store.load_state()
@@ -219,7 +220,7 @@ class TestLeaderboard:
                     "inflow_share": pl.Float64, "inflow_amount": pl.Float64},
             orient="row"))
         monkeypatch.setattr(etf_fund, "trading_calendar", lambda repo, s, e: CAL)
-        out = etf_fund.leaderboard_rows(repo=None, broad={"A"}, sort="change_pct",
+        out = etf_fund.leaderboard_rows(repo=None, sort="change_pct",
                                         order="desc", page=1, size=20, broad_only=False)
         rows = {r["symbol"]: r for r in out["rows"]}
         assert out["total"] == 3 and out["data_date"] == "2026-08-10"
@@ -251,7 +252,7 @@ class TestLeaderboard:
                     "inflow_share": pl.Float64, "inflow_amount": pl.Float64},
             orient="row"))
         monkeypatch.setattr(etf_fund, "trading_calendar", lambda repo, s, e: CAL)
-        out = etf_fund.leaderboard_rows(repo=None, broad={"A"}, sort="amount",
+        out = etf_fund.leaderboard_rows(repo=None, sort="amount",
                                         order="desc", page=1, size=20, broad_only=False)
         rows = {r["symbol"]: r for r in out["rows"]}
         a = rows["A"]
@@ -263,10 +264,10 @@ class TestLeaderboard:
         self._write_enriched()
         store.save_broad(["A"])
         monkeypatch.setattr(etf_fund, "trading_calendar", lambda repo, s, e: CAL)
-        out = etf_fund.leaderboard_rows(repo=None, broad={"A"}, sort="change_pct",
+        out = etf_fund.leaderboard_rows(repo=None, sort="change_pct",
                                         order="asc", page=1, size=2, broad_only=True)
         assert out["total"] == 1 and out["rows"][0]["symbol"] == "A"
-        out2 = etf_fund.leaderboard_rows(repo=None, broad={"A"}, sort="change_pct",
+        out2 = etf_fund.leaderboard_rows(repo=None, sort="change_pct",
                                          order="asc", page=2, size=2, broad_only=False)
         assert out2["total"] == 3 and len(out2["rows"]) == 1  # 第二页剩 1 行
 
@@ -410,12 +411,13 @@ class TestApi:
         monkeypatch.setattr(etf_api, "_etf_symbols", lambda repo: {"510300.SH"})
         out = etf_api.put_broad(_req(), etf_api.BroadIn(symbols=["510300.SH"]))
         assert out["symbols"] == ["510300.SH"]
-        assert store.load_broad() == ["510300.SH"]
+        assert out["is_default"] is False
+        assert store.load_broad() == {"symbols": ["510300.SH"], "customized": True}
 
     def test_leaderboard_size_clamped(self, monkeypatch):
         captured = {}
 
-        def fake_rows(repo, broad, sort, order, page, size, broad_only):
+        def fake_rows(repo, sort, order, page, size, broad_only):
             captured["size"] = size
             return {"rows": [], "total": 0, "data_date": None}
 
@@ -431,3 +433,183 @@ class TestApi:
         with pytest.raises(Exception) as ei:
             asyncio.run(etf_api.post_sync(_req(), etf_api.SyncIn(mode="incremental")))
         assert getattr(ei.value, "status_code", None) == 409
+
+
+class TestBroadPresets:
+    """宽基推荐清单与四态 effective_broad 测试 (spec §6)。"""
+
+    def _instruments(self, symbols):
+        return pl.DataFrame({"symbol": symbols, "name": [f"ETF{s}" for s in symbols]})
+
+    def test_preset_list_has_19(self):
+        from app.services.etf_broad_presets import PRESET_BROAD_ETFS
+        assert len(PRESET_BROAD_ETFS) == 19
+        assert len(set(PRESET_BROAD_ETFS)) == 19  # 无重复
+
+    def test_preset_symbols_intersect(self):
+        from app.services.etf_broad_presets import PRESET_BROAD_ETFS, preset_symbols
+        # 清单中存在的全部保留, 不存在的静默剔除
+        inst = self._instruments([PRESET_BROAD_ETFS[0], "999999.XX", PRESET_BROAD_ETFS[5]])
+        out = preset_symbols(inst)
+        assert PRESET_BROAD_ETFS[0] in out
+        assert PRESET_BROAD_ETFS[5] in out
+        assert "999999.XX" not in out
+
+    def test_preset_symbols_none_empty(self):
+        from app.services.etf_broad_presets import preset_symbols
+        assert preset_symbols(None) == []
+        assert preset_symbols(pl.DataFrame()) == []
+
+    def test_effective_broad_default(self):
+        """默认态 (未配置): 返回 preset∩instruments, is_default=True。"""
+        from app.services.etf_broad_presets import PRESET_BROAD_ETFS, effective_broad
+        inst = self._instruments([*PRESET_BROAD_ETFS[:3], "999999.XX"])
+        syms, is_default = effective_broad(inst)
+        assert is_default is True
+        assert syms == set(PRESET_BROAD_ETFS[:3])
+
+    def test_effective_broad_customized(self):
+        """自定义态: 返回用户清单, is_default=False。"""
+        from app.services.etf_broad_presets import effective_broad
+        store.save_broad(["510300.SH", "159919.SZ"])
+        syms, is_default = effective_broad(self._instruments(["510300.SH", "159919.SZ"]))
+        assert is_default is False
+        assert syms == {"510300.SH", "159919.SZ"}
+
+    def test_effective_broad_empty_customized(self):
+        """用户保存空清单 (customized=True): 返回空, is_default=False。"""
+        from app.services.etf_broad_presets import effective_broad
+        store.save_broad([])  # save_broad([]) → {"symbols": [], "customized": True}
+        syms, is_default = effective_broad(self._instruments(["510300.SH"]))
+        assert is_default is False
+        assert syms == set()
+
+    def test_effective_broad_after_reset(self):
+        """reset 后: 回默认态, is_default=True。"""
+        from app.services.etf_broad_presets import PRESET_BROAD_ETFS, effective_broad
+        store.save_broad(["510300.SH"])
+        store.reset_broad()
+        inst = self._instruments(PRESET_BROAD_ETFS[:2])
+        syms, is_default = effective_broad(inst)
+        assert is_default is True
+        assert syms == set(PRESET_BROAD_ETFS[:2])
+
+    def test_effective_broad_none_instruments(self):
+        """instruments=None 不抛异常。"""
+        from app.services.etf_broad_presets import effective_broad
+        # 默认态 + None → (set(), True)
+        syms, is_default = effective_broad(None)
+        assert is_default is True
+        assert syms == set()
+        # 自定义态 + None → (用户清单, False)
+        store.save_broad(["510300.SH"])
+        syms, is_default = effective_broad(None)
+        assert is_default is False
+        assert syms == {"510300.SH"}
+
+    def test_effective_broad_empty_dataframe(self):
+        """instruments 为空 DataFrame 不抛异常。"""
+        from app.services.etf_broad_presets import effective_broad
+        syms, is_default = effective_broad(pl.DataFrame({"symbol": [], "name": []}))
+        assert is_default is True
+        assert syms == set()
+
+    def test_load_broad_legacy_list_format(self):
+        """旧格式 (纯 JSON list) 兼容 → customized=True。"""
+        import json
+        path = store.data_dir() / "broad_etf.json"
+        path.write_text(json.dumps(["510300.SH", "510500.SH"]), encoding="utf-8")
+        out = store.load_broad()
+        assert out == {"symbols": ["510300.SH", "510500.SH"], "customized": True}
+
+    def test_api_get_broad_default(self, monkeypatch):
+        """GET /broad 默认态: symbols=preset∩instruments, is_default=True。"""
+        # repo=None 时 instruments=None → 默认态 symbols=[]
+        out = etf_api.get_broad(_req())
+        assert out["is_default"] is True
+        assert out["symbols"] == []
+        assert out["presets"] == []  # instruments=None → preset_symbols 返回 []
+
+    def test_api_get_broad_customized(self, monkeypatch):
+        """GET /broad 自定义态: symbols=用户清单, is_default=False。"""
+        store.save_broad(["510300.SH"])
+        out = etf_api.get_broad(_req())
+        assert out["is_default"] is False
+        assert out["symbols"] == ["510300.SH"]
+
+    def test_api_reset_broad(self):
+        """POST /broad/reset: 回默认态。"""
+        store.save_broad(["510300.SH"])
+        out = etf_api.reset_broad(_req())
+        assert out["is_default"] is True
+        assert out["symbols"] == []
+        assert store.load_broad() == {"symbols": [], "customized": False}
+
+    def test_api_get_instruments_with_market_cap(self, monkeypatch):
+        """GET /instruments: items 含 market_cap (有/无资金数据两态)。"""
+        # 设置 share+nav → _latest_share_nav 有值
+        store.merge_share(_share_df([("A", date(2026, 8, 10), 20000.0, date(2026, 8, 11))]))
+        store.merge_nav(_nav([("A", date(2026, 8, 10), 2.0)]))
+
+        class _Repo:
+            def get_etf_instruments(self):
+                return pl.DataFrame({"symbol": ["A", "B"], "name": ["ETF_A", "ETF_B"]})
+
+        req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=_Repo())))
+        out = etf_api.get_instruments(req)
+        items = {r["symbol"]: r for r in out["items"]}
+        # A: 20000万份 x 2元 / 1e4 = 4亿
+        assert items["A"]["market_cap"] is not None
+        assert items["A"]["market_cap"] == pytest.approx(4.0)
+        # B: 无资金数据 → None
+        assert items["B"]["market_cap"] is None
+
+    def test_api_get_instruments_no_fund_data(self, monkeypatch):
+        """GET /instruments: 无 share/nav 时 market_cap 全 None。"""
+        class _Repo:
+            def get_etf_instruments(self):
+                return pl.DataFrame({"symbol": ["A"], "name": ["ETF_A"]})
+
+        req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=_Repo())))
+        out = etf_api.get_instruments(req)
+        assert len(out["items"]) == 1
+        assert out["items"][0]["market_cap"] is None
+
+    def test_fund_flow_default_uses_preset(self, monkeypatch):
+        """fund_flow 默认态: 使用推荐清单, is_default=True, broad_count=有效集合大小。"""
+        from app.services.etf_broad_presets import PRESET_BROAD_ETFS
+        # 写入 inflow 数据, code 命中 preset
+        code = PRESET_BROAD_ETFS[0]
+        store.write_inflow(pl.DataFrame(
+            [(code, date(2026, 8, 5), 10.0, 20.0),
+             (code, date(2026, 8, 6), 5.0, 10.0)],
+            schema={"code": pl.Utf8, "trade_date": pl.Date,
+                    "inflow_share": pl.Float64, "inflow_amount": pl.Float64},
+            orient="row"))
+        monkeypatch.setattr(etf_fund, "trading_calendar", lambda repo, s, e: CAL)
+
+        class _Repo:
+            def get_etf_instruments(self):
+                return pl.DataFrame({"symbol": [code], "name": [f"ETF{code}"]})
+
+        out = etf_fund.fund_flow(repo=_Repo(), days=60)
+        assert out["is_default"] is True
+        assert out["broad_count"] == 1  # preset∩instruments = {code}
+        assert len(out["series"]) > 0  # 有数据
+
+    def test_fund_flow_empty_default(self, monkeypatch):
+        """fund_flow 默认态 + repo=None: broad 为空, is_default=True。"""
+        monkeypatch.setattr(etf_fund, "trading_calendar", lambda repo, s, e: CAL)
+        out = etf_fund.fund_flow(repo=None, days=60)
+        assert out["is_default"] is True
+        assert out["broad_count"] == 0
+        assert out["series"] == []
+
+    def test_fund_flow_customized_empty(self, monkeypatch):
+        """fund_flow 自定义空清单: is_default=False, broad_count=0, series 空。"""
+        store.save_broad([])  # customized=True, symbols=[]
+        monkeypatch.setattr(etf_fund, "trading_calendar", lambda repo, s, e: CAL)
+        out = etf_fund.fund_flow(repo=None, days=60)
+        assert out["is_default"] is False
+        assert out["broad_count"] == 0
+        assert out["series"] == []

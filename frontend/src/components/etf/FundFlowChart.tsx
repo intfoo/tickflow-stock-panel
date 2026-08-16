@@ -217,13 +217,11 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
         <div className="flex h-[360px] flex-col items-center justify-center gap-1 text-xs text-muted">
           {flow.broad_count === 0 ? (
             <>
-              <span>尚未配置宽基 ETF</span>
-              <span className="text-[10px] text-muted/60">请点击右上角「宽基配置」勾选宽基 ETF，资金流图按宽基申购净流入合计展示</span>
+              <span>宽基清单为空（已主动清空），请到「宽基配置」重新选择</span>
             </>
           ) : (
             <>
-              <span>暂无净流入数据</span>
-              <span className="text-[10px] text-muted/60">请先在「数据同步」中回填份额/净值数据</span>
+              <span>暂无净流入数据，请先在「数据同步」中回填</span>
             </>
           )}
         </div>

@@ -126,18 +126,40 @@ def save_config(cfg: dict) -> None:
     _write_json(data_dir() / "config.json", merged)
 
 
-def load_broad() -> list[str]:
+_DEFAULT_BROAD = {"symbols": [], "customized": False}
+
+
+def load_broad() -> dict:
+    """返回 {"symbols": list[str], "customized": bool}。
+
+    - 文件不存在 → 默认态 {"symbols": [], "customized": False}
+    - 旧格式 (纯 list) → {"symbols": list, "customized": True}
+    - dict → 原样 (补默认键)
+    """
     path = data_dir() / "broad_etf.json"
     if not path.exists():
-        return []
+        return json.loads(json.dumps(_DEFAULT_BROAD))
     try:
-        return list(json.loads(path.read_text(encoding="utf-8")))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return []
+        return json.loads(json.dumps(_DEFAULT_BROAD))
+    if isinstance(data, list):
+        return {"symbols": list(data), "customized": True}
+    if not isinstance(data, dict):
+        return json.loads(json.dumps(_DEFAULT_BROAD))
+    out = json.loads(json.dumps(_DEFAULT_BROAD))
+    out.update(data)
+    return out
 
 
 def save_broad(symbols: list[str]) -> None:
-    _write_json(data_dir() / "broad_etf.json", sorted(set(symbols)))
+    _write_json(data_dir() / "broad_etf.json",
+                {"symbols": sorted(set(symbols)), "customized": True})
+
+
+def reset_broad() -> None:
+    _write_json(data_dir() / "broad_etf.json",
+                {"symbols": [], "customized": False})
 
 
 def load_state() -> dict:

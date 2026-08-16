@@ -2536,7 +2536,14 @@ export interface AnalysisMenu {
 
 // ===== ETF 资金/份额 (fork 私有, 追加于文件末尾降低上游合并冲突) =====
 
-export interface EtfInstrumentItem { symbol: string; name: string }
+export interface EtfInstrumentItem { symbol: string; name: string; market_cap: number | null }
+
+export interface EtfBroadResult {
+  symbols: string[]
+  is_default: boolean
+  items: EtfInstrumentItem[]
+  presets: EtfInstrumentItem[]
+}
 
 export interface EtfFundConfig {
   sources: { name: string; display_name: string }[]
@@ -2587,17 +2594,20 @@ export interface EtfFlowResult {
     data_end_date: string | null
   }
   broad_count: number
+  is_default: boolean
 }
 
 export const etfFundApi = {
   getConfig: () => request<EtfFundConfig>('/api/etf-fund/config'),
   putConfig: (body: { data_source: string; overlay_index?: string }) =>
     request<EtfFundConfig>('/api/etf-fund/config', { method: 'PUT', body: JSON.stringify(body) }),
-  getBroad: () => request<{ symbols: string[]; items: EtfInstrumentItem[] }>('/api/etf-fund/broad'),
+  getBroad: () => request<EtfBroadResult>('/api/etf-fund/broad'),
   putBroad: (symbols: string[]) =>
-    request<{ symbols: string[]; items: EtfInstrumentItem[] }>('/api/etf-fund/broad', {
+    request<EtfBroadResult>('/api/etf-fund/broad', {
       method: 'PUT', body: JSON.stringify({ symbols }),
     }),
+  resetBroad: () =>
+    request<EtfBroadResult>('/api/etf-fund/broad/reset', { method: 'POST' }),
   getInstruments: () => request<{ items: EtfInstrumentItem[] }>('/api/etf-fund/instruments'),
   postSync: (body: { mode: 'incremental' | 'backfill'; start?: string; end?: string; batch_days?: number }) =>
     request<{ ok: boolean }>('/api/etf-fund/sync', { method: 'POST', body: JSON.stringify(body) }),
