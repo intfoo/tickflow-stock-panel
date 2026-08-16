@@ -1,10 +1,26 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, RefreshCw, AlertTriangle } from 'lucide-react'
 import { etfFundApi } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
 import { DatePicker } from '@/components/DatePicker'
+
+const pad = (n: number) => String(n).padStart(2, '0')
+const toISO = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+
+function todayStr(): string {
+  return toISO(new Date())
+}
+
+/** 往前推 N 个月, 日期溢出时收敛到当月最后一天 (如 08-31 → 02-28) */
+function minusMonths(iso: string, months: number): string {
+  const d = new Date(`${iso}T00:00:00`)
+  const day = d.getDate()
+  d.setMonth(d.getMonth() - months)
+  if (d.getDate() !== day) d.setDate(0)
+  return toISO(d)
+}
 
 export function EtfSyncCard() {
   const qc = useQueryClient()
@@ -28,6 +44,15 @@ export function EtfSyncCard() {
   const config = configQuery.data
   const status = statusQuery.data
   const configured = !!config?.data_source
+
+  // 默认回填区间: 结束 = 本地数据最早日 (无数据则今天), 开始 = 结束前 6 个月。
+  // 等 status 首次就绪后填一次; 用户已填写时不覆盖。
+  useEffect(() => {
+    if (!status || backfillStart || backfillEnd) return
+    const end = status.data_range?.min ?? todayStr()
+    setBackfillEnd(end)
+    setBackfillStart(minusMonths(end, 6))
+  }, [status, backfillStart, backfillEnd])
 
   const saveConfigMutation = useMutation({
     mutationFn: (name: string) => etfFundApi.putConfig({ data_source: name }),
