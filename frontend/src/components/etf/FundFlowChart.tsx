@@ -62,6 +62,23 @@ function barRange(amounts: number[], startIdx: number, endIdx: number): { min: n
   }
 }
 
+/** 隐藏轴范围: 使其 0 刻度与柱轴 0 在同一水平线 (f = 柱轴零点比例) */
+function alignZeroRange(cumVals: (number | null)[], f: number): { min: number; max: number } {
+  let lo = 0
+  let hi = 0
+  for (const v of cumVals) {
+    if (v == null) continue
+    if (v < lo) lo = v
+    if (v > hi) hi = v
+  }
+  const pad = Math.max((hi - lo) * 0.05, 0.01)
+  lo -= pad
+  hi += pad
+  // r = 隐藏轴总量程; 需同时容纳 hi (0 轴以上) 与 lo (0 轴以下)
+  const r = Math.max(hi / (1 - f), -lo / f)
+  return { min: -f * r, max: (1 - f) * r }
+}
+
 export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, onStatDaysChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<echarts.ECharts | null>(null)
@@ -112,9 +129,17 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
         const endIdx = Math.min(n - 1, Math.round((endPct / 100) * (n - 1)))
         cumStartDateRef.current = datesRef.current[startIdx] ?? ''
         const range = barRange(arr, startIdx, endIdx)
+        const cumData = cumFrom(arr, startIdx)
+        // 隐藏轴 0 刻度与柱轴 0 对齐 (同一零点比例)
+        const f = -range.min / (range.max - range.min)
+        const cumRange = alignZeroRange(cumData.slice(startIdx, endIdx + 1), f)
         c.setOption({
-          series: [{ id: 'cum', data: cumFrom(arr, startIdx) }],
-          yAxis: [{ min: range.min, max: range.max }],
+          series: [{ id: 'cum', data: cumData }],
+          yAxis: [
+            { min: range.min, max: range.max },
+            {},
+            { min: cumRange.min, max: cumRange.max },
+          ],
         })
       })
     }
@@ -137,6 +162,9 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
 
     // 柱轴初始范围按默认窗口内柱值 (之后随 dataZoom 动态缩放)
     const initBarRange = barRange(amounts, zoomStartIdx, dates.length - 1)
+    // 隐藏轴初始范围: 0 刻度与柱轴 0 对齐
+    const initZeroFrac = -initBarRange.min / (initBarRange.max - initBarRange.min)
+    const initCumRange = alignZeroRange(cumulative.slice(zoomStartIdx), initZeroFrac)
 
     const option: EChartsOption = {
       animation: false,
@@ -210,10 +238,12 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
           splitLine: { show: false },
         },
         {
-          // 累计净流入独立轴: 隐藏刻度, 只作独立缩放 (避免千亿级累计值压扁每日柱)
+          // 累计净流入独立轴: 隐藏刻度, 只作独立缩放 (避免千亿级累计值压扁每日柱);
+          // min/max 使 0 刻度与柱轴 0 对齐 (随 dataZoom 动态更新)
           type: 'value',
           show: false,
-          scale: true,
+          min: initCumRange.min,
+          max: initCumRange.max,
         },
       ],
       dataZoom: [
