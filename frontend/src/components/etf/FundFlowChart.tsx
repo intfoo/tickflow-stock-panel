@@ -71,7 +71,9 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
     const overlayMap = new Map(overlayRows.map(r => [r.date.slice(0, 10), r.close]))
     const overlayData = dates.map(d => overlayMap.get(d) ?? null)
 
-    const barColors = amounts.map(v => (v >= 0 ? RED : GREEN))
+    // 拆两个堆叠系列, 图例红/绿与柱体精确一致 (单系列逐点上色时图例只能取默认色)
+    const inflowPos = amounts.map(v => (v >= 0 ? v : null))
+    const inflowNeg = amounts.map(v => (v < 0 ? v : null))
 
     const option: EChartsOption = {
       animation: false,
@@ -85,7 +87,7 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
         textStyle: { color: ct.tooltipText, fontSize: 11 },
       },
       legend: {
-        data: ['宽基ETF申购净流入', overlayName],
+        data: ['宽基ETF申购净流入', '宽基ETF申购净流出', overlayName],
         top: 0,
         textStyle: { color: ct.text, fontSize: 10 },
         itemWidth: 12,
@@ -129,7 +131,17 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
         {
           name: '宽基ETF申购净流入',
           type: 'bar',
-          data: amounts.map((v, i) => ({ value: v, itemStyle: { color: barColors[i] } })),
+          stack: 'flow',
+          data: inflowPos,
+          itemStyle: { color: RED },
+          yAxisIndex: 0,
+        },
+        {
+          name: '宽基ETF申购净流出',
+          type: 'bar',
+          stack: 'flow',
+          data: inflowNeg,
+          itemStyle: { color: GREEN },
           yAxisIndex: 0,
         },
         {
@@ -139,7 +151,8 @@ export function FundFlowChart({ flow, overlayIndex, onOverlayChange, statDays, o
           yAxisIndex: 1,
           symbol: 'none',
           lineStyle: { width: 1.2, color: '#9CA3AF' },
-          connectNulls: false,
+          itemStyle: { color: '#9CA3AF' },
+          connectNulls: true,
         },
       ],
     }

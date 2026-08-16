@@ -77,6 +77,12 @@ export function EtfLeaderboard() {
   const total = query.data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
+  // 行情数据日期超过 7 天视为 stale (本地 ETF 日K 未同步), 给出提示
+  const staleDays = query.data?.data_date
+    ? Math.floor((Date.now() - new Date(`${query.data.data_date}T00:00:00`).getTime()) / 86400000)
+    : 0
+  const isStale = staleDays > 7
+
   const handleSort = (col: string) => {
     if (col === sort) {
       setOrder(o => (o === 'desc' ? 'asc' : 'desc'))
@@ -116,7 +122,10 @@ export function EtfLeaderboard() {
           只看宽基
         </label>
         {query.data?.data_date && (
-          <span className="text-[10px] text-muted">数据日期: {query.data.data_date}</span>
+          <span className={`text-[10px] ${isStale ? 'text-warning' : 'text-muted'}`}>
+            数据日期: {query.data.data_date}
+            {isStale && '（行情数据较旧，请在「数据」页同步 ETF 日K）'}
+          </span>
         )}
       </div>
 
