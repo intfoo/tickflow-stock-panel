@@ -29,6 +29,7 @@ import {
   useDataStatus,
 } from '@/lib/useSharedQueries'
 import { useToggleRealtimeQuotes, useUpdateQuoteInterval } from '@/lib/useSharedMutations'
+import { MissingCapChip } from '@/lib/capability-labels'
 import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
 import { formatScheduleDatePart, formatScheduleTimePart, isToday } from '@/lib/format'
@@ -285,6 +286,15 @@ export function Data() {
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
       // 同步任务结束后 regime 覆盖范围可能变化, 一并刷新画像
       qc.invalidateQueries({ queryKey: QK.regimeCoverage })
+      // 同步重写了指数日K/enriched/日K → 失效消费这些数据的查询。
+      // 侧边栏指数查询挂在 Layout 常驻不重挂载 (refetchOnWindowFocus 已关),
+      // 不失效会一直显示同步前的旧值; 自选相关查询在页面正打开时同理。
+      if (job.data.status === 'succeeded') {
+        qc.invalidateQueries({ queryKey: QK.indexQuotes })
+        qc.invalidateQueries({ queryKey: ['index-daily'] })
+        qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
+        qc.invalidateQueries({ queryKey: ['kline-batch'] })
+      }
       const t = setTimeout(() => setActiveJobId(null), 5_000)
       return () => clearTimeout(t)
     }
@@ -404,7 +414,6 @@ export function Data() {
             stagePct={activeCard === 'instruments' ? (job.data?.stage_pct ?? 0) : 0}
             tierKey="instruments"
             capLimits={caps.data?.capabilities}
-            tierLabel={caps.data?.label}
             auto
             onShowFields={() => setSchemaTable('instruments')}
           />
@@ -422,7 +431,6 @@ export function Data() {
             stagePct={activeCard === 'daily' ? (job.data?.stage_pct ?? 0) : 0}
             tierKey="daily"
             capLimits={caps.data?.capabilities}
-            tierLabel={caps.data?.label}
             customProvider={getCustomProviderName('daily')}
             auto
             onShowFields={() => setSchemaTable('daily')}
@@ -443,7 +451,6 @@ export function Data() {
             stagePct={activeCard === 'adj_factor' ? (job.data?.stage_pct ?? 0) : 0}
             tierKey="adj_factor"
             capLimits={caps.data?.capabilities}
-            tierLabel={caps.data?.label}
             customProvider={getCustomProviderName('adj_factor')}
             auto
             onShowFields={() => setSchemaTable('adj_factor')}
@@ -462,7 +469,6 @@ export function Data() {
             stagePct={activeCard === 'enriched' ? (job.data?.stage_pct ?? 0) : 0}
             tierKey="enriched"
             capLimits={caps.data?.capabilities}
-            tierLabel={caps.data?.label}
             auto
             subLabel={status.data?.indicators_ready === false ? '字段 · 指标计算中…' : '字段 · 指标 · 信号'}
             localBadgeSuffix={`${prefs.data?.enriched_batch_size ?? 1000}只/批`}
@@ -484,7 +490,6 @@ export function Data() {
             stagePct={activeCard === 'index_daily' ? (job.data?.stage_pct ?? 0) : 0}
             tierKey="daily"
             capLimits={caps.data?.capabilities}
-            tierLabel={caps.data?.label}
             auto={indexAuto}
             subLabel={indexOverviewLabel}
             fieldTabs={[
@@ -510,7 +515,6 @@ export function Data() {
             stagePct={activeCard === 'etf_daily' ? (job.data?.stage_pct ?? 0) : 0}
             tierKey="etf"
             capLimits={caps.data?.capabilities}
-            tierLabel={caps.data?.label}
             customProvider={getCustomProviderName('etf')}
             auto={etfAuto}
             subLabel="维表 · 日K · 指标"
@@ -537,7 +541,6 @@ export function Data() {
             stagePct={activeCard === 'minute' ? (job.data?.stage_pct ?? 0) : 0}
             tierKey="minute"
             capLimits={caps.data?.capabilities}
-            tierLabel={caps.data?.label}
             customProvider={getCustomProviderName('minute')}
             auto={minuteAuto}
             onShowFields={() => setSchemaTable('minute')}
@@ -555,7 +558,6 @@ export function Data() {
             loading={isLoading}
             tierKey="financials"
             capLimits={caps.data?.capabilities}
-            tierLabel={caps.data?.label}
             customProvider={getCustomProviderName('financials')}
             subLabel={`历史股本 · ${historicalShareRows.toLocaleString()} 条`}
             onSettings={hasData ? () => setOpenSettings(v => v === 'financials' ? null : 'financials') : undefined}
@@ -576,7 +578,6 @@ export function Data() {
             stagePct={activeCard === 'regime' ? (job.data?.stage_pct ?? 0) : 0}
             tierKey="regime"
             capLimits={caps.data?.capabilities}
-            tierLabel={caps.data?.label}
             auto={prefs.data?.pipeline_regime_enabled === true}
             subLabel="状态 · 综合分 · 指标"
             onSettings={hasData ? () => setOpenSettings(v => v === 'regime' ? null : 'regime') : undefined}
@@ -672,6 +673,7 @@ export function Data() {
       />
 
       <div className="px-8 py-6 space-y-6 max-w-6xl">
+
         {/* 实时进度 */}
         <AnimatePresence>
           {job.data && (
@@ -1153,9 +1155,7 @@ export function Data() {
                   )}
                 </button>
                 {!hasDailyBatchCap && (
-                  <span className="text-[10px] text-warning/80 bg-warning/8 rounded px-1.5 py-px font-medium">
-                    需 Starter+ / Pro 批量日 K 权限
-                  </span>
+                  <MissingCapChip capKey="kline.daily.batch" />
                 )}
               </div>
             </div>

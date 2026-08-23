@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { MissingCapChip } from '@/lib/capability-labels'
 
 export function ExtendHistoryPanel({ assetType = 'stock', caps, isRunning, earliestDate, onStart }: {
   assetType?: 'stock' | 'etf'
@@ -92,9 +93,7 @@ export function ExtendHistoryPanel({ assetType = 'stock', caps, isRunning, earli
       </button>
 
       {!hasBatchCap && (
-        <span className="text-[10px] text-warning/80 bg-warning/8 rounded px-1.5 py-px font-medium">
-          需 Pro+ 权限
-        </span>
+        <MissingCapChip capKey="kline.daily.batch" />
       )}
     </div>
   )
