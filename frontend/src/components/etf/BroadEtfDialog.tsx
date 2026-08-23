@@ -12,7 +12,7 @@ interface Props {
 
 const QUICK_KEYWORDS = [
   '沪深300', '中证500', '中证1000', '上证50',
-  '创业板指', '科创50', '深证100', '中证2000',
+  '创业板', '科创50', '深证100', '中证2000',
   '中证A500', '上证综指',
 ]
 
@@ -78,7 +78,7 @@ export function BroadEtfDialog({ open, onClose }: Props) {
     if (!q) return allItems
     return allItems.filter(i =>
       i.symbol.toLowerCase().includes(q) || i.name.toLowerCase().includes(q),
-    )
+    ).sort(sortByMarketCapDesc)
   }, [allItems, keyword])
 
   // 无搜索词时三分组数据

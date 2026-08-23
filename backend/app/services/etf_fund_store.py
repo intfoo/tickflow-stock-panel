@@ -20,7 +20,7 @@ NAV_SCHEMA = {"code": pl.Utf8, "trade_date": pl.Date, "nav": pl.Float64}
 INFLOW_SCHEMA = {"code": pl.Utf8, "trade_date": pl.Date,
                  "inflow_share": pl.Float64, "inflow_amount": pl.Float64}
 
-_DEFAULT_CONFIG = {"data_source": None, "overlay_index": "000001.SH"}
+_DEFAULT_CONFIG = {"data_source": None, "overlay_index": "000001.SH", "batch_months": 1}
 _DEFAULT_STATE = {
     "last_sync": None,
     "completed_chunks": [],

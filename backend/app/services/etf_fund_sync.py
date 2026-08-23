@@ -4,7 +4,7 @@
 - auth 复用 (§4.3): _token_from_env 预检 + 401 区分
 - 数据源动态解析: 每次从 yaml 实时取 URL/auth (yaml 由用户显式维护, 不做指纹设卡)
 - 单飞 (§4.5): 模块级 asyncio.Lock, 增量/回填互斥
-- 回填按 batch_days 天分批 (页面可配), 可续跑跳过已完成批
+- 回填按 batch_months 自然月分批 (页面可配, 持久化在 config.json), 可续跑跳过已完成批
 """
 from __future__ import annotations
 
@@ -48,12 +48,21 @@ def extract_base_url(url: str) -> str:
     return base.rstrip("/")
 
 
-def _chunk_ranges(start: date, end: date, days: int) -> list[tuple[date, date]]:
-    """按固定天数切分 [start, end] 区间 (回填批次)。"""
+def _add_months(d: date, months: int) -> date:
+    """日期加 N 个自然月, 日溢出时收敛到当月最后一天 (如 01-31 + 1月 → 02-28)。"""
+    m = d.month - 1 + months
+    year = d.year + m // 12
+    month = m % 12 + 1
+    last_day = 31 if month == 12 else (date(year, month + 1, 1) - timedelta(days=1)).day
+    return date(year, month, min(d.day, last_day))
+
+
+def _chunk_ranges(start: date, end: date, months: int) -> list[tuple[date, date]]:
+    """按自然月数切分 [start, end] 区间 (回填批次)。"""
     ranges: list[tuple[date, date]] = []
     cur = start
     while cur <= end:
-        seg_end = min(cur + timedelta(days=days - 1), end)
+        seg_end = min(_add_months(cur, months) - timedelta(days=1), end)
         ranges.append((cur, seg_end))
         cur = seg_end + timedelta(days=1)
     return ranges
@@ -261,15 +270,15 @@ async def run_incremental(repo) -> dict:
     return {"ok": True}
 
 
-async def run_backfill(repo, start: date, end: date, batch_days: int = 30) -> None:
-    """分批回填: 按 batch_days 天一批, 续跑跳过 completed_chunks, 完成后 recompute + 更新 data_range。
+async def run_backfill(repo, start: date, end: date, batch_months: int = 1) -> None:
+    """分批回填: 按 batch_months 自然月一批, 续跑跳过 completed_chunks, 完成后 recompute + 更新 data_range。
 
     须持 _lock 调用(经 trigger)。批次键为批起始日 ISO, 改批次大小后重叠区间会重拉
     (merge 去重, 无害)。
     """
     src = resolve_source()
-    batch_days = max(1, batch_days)
-    chunks = _chunk_ranges(start, end, batch_days)
+    batch_months = max(1, batch_months)
+    chunks = _chunk_ranges(start, end, batch_months)
 
     state = store.load_state()
     completed = set(state.get("completed_chunks") or [])
@@ -328,7 +337,7 @@ def sync_status() -> dict:
 
 async def trigger(
     mode: str, repo, start: date | None = None, end: date | None = None,
-    batch_days: int = 30,
+    batch_months: int = 1,
 ) -> dict:
     """单飞触发同步: 运行中 → SyncError(409); 否则后台 create_task。
 
@@ -347,7 +356,7 @@ async def trigger(
             elif mode == "backfill":
                 if start is None or end is None:
                     raise SyncError("backfill 需要 start 和 end", 422)
-                await run_backfill(repo, start, end, batch_days)
+                await run_backfill(repo, start, end, batch_months)
         except SyncError:
             raise
         except Exception as e:

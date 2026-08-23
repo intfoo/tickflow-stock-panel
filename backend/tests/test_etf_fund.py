@@ -308,12 +308,20 @@ class TestSyncHelpers:
         assert sync.extract_base_url("https://x.com:8443") == "https://x.com:8443"
 
     def test_chunk_ranges(self):
-        r = sync._chunk_ranges(date(2026, 1, 15), date(2026, 3, 10), 30)
-        assert r == [(date(2026, 1, 15), date(2026, 2, 13)),
-                     (date(2026, 2, 14), date(2026, 3, 10))]
+        # 按自然月切分: 01-15 + 1月 = 02-15, 减 1 天 → 批 1 到 02-14
+        r = sync._chunk_ranges(date(2026, 1, 15), date(2026, 3, 10), 1)
+        assert r == [(date(2026, 1, 15), date(2026, 2, 14)),
+                     (date(2026, 2, 15), date(2026, 3, 10))]
         # 批次大于区间 → 单批
-        assert sync._chunk_ranges(date(2026, 1, 1), date(2026, 1, 10), 30) == [
+        assert sync._chunk_ranges(date(2026, 1, 1), date(2026, 1, 10), 2) == [
             (date(2026, 1, 1), date(2026, 1, 10))]
+        # 日溢出收敛: 01-31 + 1月 → 02-28, 减 1 天 → 批 1 到 02-27
+        r = sync._chunk_ranges(date(2026, 1, 31), date(2026, 3, 31), 1)
+        assert r[0] == (date(2026, 1, 31), date(2026, 2, 27))
+        assert r[-1][1] == date(2026, 3, 31)
+        # 跨年: 12-15 + 2月 → 次年 02-15
+        r = sync._chunk_ranges(date(2026, 12, 15), date(2027, 3, 1), 2)
+        assert r[0] == (date(2026, 12, 15), date(2027, 2, 14))
 
     def test_resolve_source_unconfigured(self):
         with pytest.raises(sync.SyncError) as ei:
@@ -385,8 +393,8 @@ class TestSyncRun:
 
         monkeypatch.setattr(sync, "_fetch_range", fake_fetch)
         monkeypatch.setattr(sync.etf_fund, "recompute_inflow", lambda repo: None)
-        # batch_days=31 → 两批: (01-01~01-31) 已完成跳过, (02-01~02-28) 拉取
-        await sync.run_backfill(None, date(2026, 1, 1), date(2026, 2, 28), batch_days=31)
+        # batch_months=1 → 两批: (01-01~01-31) 已完成跳过, (02-01~02-28) 拉取
+        await sync.run_backfill(None, date(2026, 1, 1), date(2026, 2, 28), batch_months=1)
         assert done == [(date(2026, 2, 1), date(2026, 2, 28)),
                         (date(2026, 2, 1), date(2026, 2, 28))]
         assert "2026-02-01" in store.load_state()["completed_chunks"]
@@ -416,6 +424,23 @@ class TestApi:
         assert out["is_default"] is False
         assert store.load_broad() == {"symbols": ["510300.SH"], "customized": True}
 
+    def test_put_config_batch_months_persisted(self):
+        # batch_months 单独保存 (不带 data_source), 持久化到 config.json 并回读
+        out = etf_api.put_config(_req(), etf_api.ConfigIn(batch_months=6))
+        assert out["batch_months"] == 6
+        assert store.load_config()["batch_months"] == 6
+        # 不影响其他配置键
+        out = etf_api.put_config(_req(), etf_api.ConfigIn())
+        assert out["batch_months"] == 6
+
+    def test_batch_months_bounds(self):
+        from pydantic import ValidationError
+        for bad in (0, 61):
+            with pytest.raises(ValidationError):
+                etf_api.ConfigIn(batch_months=bad)
+            with pytest.raises(ValidationError):
+                etf_api.SyncIn(mode="backfill", batch_months=bad)
+
     def test_leaderboard_size_clamped(self, monkeypatch):
         captured = {}
 
@@ -429,12 +454,49 @@ class TestApi:
         assert captured["size"] == 100
 
     def test_sync_unconfigured_409(self, monkeypatch):
-        async def fake_trigger(mode, repo, start, end, batch_days=30):
+        async def fake_trigger(mode, repo, start, end, batch_months=1):
             raise sync.SyncError("未配置数据源", 409)
         monkeypatch.setattr(etf_api.etf_fund_sync, "trigger", fake_trigger)
         with pytest.raises(Exception) as ei:
             asyncio.run(etf_api.post_sync(_req(), etf_api.SyncIn(mode="incremental")))
         assert getattr(ei.value, "status_code", None) == 409
+
+
+class TestRiskZones:
+    """risk_zones 区域判定 (价低+流高=opp / 底背离 div)。"""
+
+    def _setup(self, n=200):
+        from datetime import timedelta
+        d0 = date(2026, 1, 1)
+        dates = [d0 + timedelta(days=i) for i in range(n)]
+        # 前 n-60 日走平 100, 后 60 日每日 -1 连创新低
+        closes = [100.0] * (n - 60) + [100.0 - (i + 1) for i in range(60)]
+        store.save_broad(["A"])
+        store.write_inflow(pl.DataFrame(
+            [("A", d, 1.0, 10000.0) for d in dates],  # 每日净流入 1 亿元 (10000 万)
+            schema={"code": pl.Utf8, "trade_date": pl.Date,
+                    "inflow_share": pl.Float64, "inflow_amount": pl.Float64},
+            orient="row"))
+        px = pl.DataFrame({"date": dates, "close": closes})
+        return SimpleNamespace(
+            get_etf_instruments=lambda: pl.DataFrame({"symbol": ["A"], "name": ["ETFA"]}),
+            get_index_daily=lambda symbol, start, end, columns: px.filter(
+                (pl.col("date") >= start) & (pl.col("date") <= end)).select(columns),
+        )
+
+    def test_zone_and_divergence(self):
+        repo = self._setup()
+        out = etf_fund.risk_zones(repo, "000300.SH", 750)
+        pts = out["series"]
+        assert len(pts) == 200
+        assert pts[30]["zone"] is None      # 不足 60 obs, 分位为 null
+        assert pts[30]["i20"] == 20.0       # 20 日 x 1 亿
+        assert pts[-1]["zone"] == "opp"     # 连创新低 + i20 分位 1.0 → 机会区
+        assert pts[141]["div"] is True      # 严格新低 + 累计流入上升 → 底背离
+        assert pts[100]["div"] is False     # 走平日不算创新低
+
+    def test_empty_when_no_repo(self):
+        assert etf_fund.risk_zones(None, "000300.SH", 750)["series"] == []
 
 
 class TestBroadPresets:

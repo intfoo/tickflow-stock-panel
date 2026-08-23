@@ -99,6 +99,7 @@ export const QK = {
   etfFundLeaderboard:   (p: { sort: string; order: string; page: number; size: number; broad_only: boolean }) =>
                            ['etf-fund', 'leaderboard', p] as const,
   etfFundFlow:          (days: number) => ['etf-fund', 'flow', days] as const,
+  etfFundZones:         (index: string) => ['etf-fund', 'zones', index] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====

@@ -18,8 +18,9 @@ router = APIRouter(prefix="/api/etf-fund", tags=["etf-fund"])
 
 
 class ConfigIn(BaseModel):
-    data_source: str
+    data_source: str | None = None
     overlay_index: str | None = None
+    batch_months: int | None = Field(None, ge=1, le=60)
 
 
 class BroadIn(BaseModel):
@@ -30,7 +31,7 @@ class SyncIn(BaseModel):
     mode: str = "incremental"
     start: date | None = None
     end: date | None = None
-    batch_days: int = Field(30, ge=1, le=366)
+    batch_months: int = Field(1, ge=1, le=60)
 
 
 def _etf_symbols(repo) -> set[str]:
@@ -69,6 +70,7 @@ def _config_payload(request: Request) -> dict:
             warning = str(e)
     return {"sources": sources, "data_source": cfg["data_source"],
             "base_url": base_url, "overlay_index": cfg["overlay_index"],
+            "batch_months": cfg.get("batch_months") or 1,
             "warning": warning}
 
 
@@ -80,13 +82,15 @@ def get_config(request: Request) -> dict:
 @router.put("/config")
 def put_config(request: Request, body: ConfigIn) -> dict:
     from app.data_providers.custom import loader
-    try:
-        loader.get_provider(body.data_source)
-    except ValueError:
-        raise HTTPException(404, f"数据源不存在: {body.data_source}") from None
+    if body.data_source:
+        try:
+            loader.get_provider(body.data_source)
+        except ValueError:
+            raise HTTPException(404, f"数据源不存在: {body.data_source}") from None
     store.save_config({
-        "data_source": body.data_source,
+        **({"data_source": body.data_source} if body.data_source else {}),
         **({"overlay_index": body.overlay_index} if body.overlay_index else {}),
+        **({"batch_months": body.batch_months} if body.batch_months is not None else {}),
     })
     return _config_payload(request)
 
@@ -158,7 +162,7 @@ async def post_sync(request: Request, body: SyncIn) -> dict:
     try:
         return await etf_fund_sync.trigger(
             body.mode, request.app.state.repo, body.start, body.end,
-            body.batch_days)
+            body.batch_months)
     except etf_fund_sync.SyncError as e:
         raise HTTPException(e.status, str(e)) from e
 
@@ -189,6 +193,12 @@ def leaderboard(
 @router.get("/flow")
 def flow(request: Request, days: int = Query(120, ge=5, le=750)) -> dict:
     return etf_fund.fund_flow(request.app.state.repo, days)
+
+
+@router.get("/zones")
+def zones(request: Request, index: str = Query("000300.SH"),
+          days: int = Query(750, ge=60, le=750)) -> dict:
+    return etf_fund.risk_zones(request.app.state.repo, index, days)
 
 
 def register_jobs(app) -> None:

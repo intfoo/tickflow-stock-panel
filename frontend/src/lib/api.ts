@@ -2550,6 +2550,7 @@ export interface EtfFundConfig {
   data_source: string | null
   base_url: string | null
   overlay_index: string
+  batch_months: number
   warning: string | null
 }
 
@@ -2597,9 +2598,24 @@ export interface EtfFlowResult {
   is_default: boolean
 }
 
+export interface EtfZonePoint {
+  trade_date: string
+  close: number | null
+  i20: number | null
+  i20_pct: number | null
+  px_pct: number | null
+  zone: 'opp' | 'risk' | null
+  div: boolean
+}
+
+export interface EtfZoneResult {
+  index: string
+  series: EtfZonePoint[]
+}
+
 export const etfFundApi = {
   getConfig: () => request<EtfFundConfig>('/api/etf-fund/config'),
-  putConfig: (body: { data_source: string; overlay_index?: string }) =>
+  putConfig: (body: { data_source?: string; overlay_index?: string; batch_months?: number }) =>
     request<EtfFundConfig>('/api/etf-fund/config', { method: 'PUT', body: JSON.stringify(body) }),
   getBroad: () => request<EtfBroadResult>('/api/etf-fund/broad'),
   putBroad: (symbols: string[]) =>
@@ -2609,11 +2625,13 @@ export const etfFundApi = {
   resetBroad: () =>
     request<EtfBroadResult>('/api/etf-fund/broad/reset', { method: 'POST' }),
   getInstruments: () => request<{ items: EtfInstrumentItem[] }>('/api/etf-fund/instruments'),
-  postSync: (body: { mode: 'incremental' | 'backfill'; start?: string; end?: string; batch_days?: number }) =>
+  postSync: (body: { mode: 'incremental' | 'backfill'; start?: string; end?: string; batch_months?: number }) =>
     request<{ ok: boolean }>('/api/etf-fund/sync', { method: 'POST', body: JSON.stringify(body) }),
   getStatus: () => request<EtfFundStatus>('/api/etf-fund/status'),
   getLeaderboard: (params: { sort: string; order: 'asc' | 'desc'; page: number; size: number; broad_only: boolean }) =>
     request<EtfLeaderboardResult>(
       `/api/etf-fund/leaderboard?sort=${params.sort}&order=${params.order}&page=${params.page}&size=${params.size}&broad_only=${params.broad_only}`),
   getFlow: (days = 120) => request<EtfFlowResult>(`/api/etf-fund/flow?days=${days}`),
+  getZones: (index: string, days = 750) =>
+    request<EtfZoneResult>(`/api/etf-fund/zones?index=${index}&days=${days}`),
 }

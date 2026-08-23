@@ -12,7 +12,9 @@ ARG BACKEND_EXTRAS=
 ARG CODEX_CLI_VERSION=0.144.3
 
 # === Stage 1: 前端构建 ===
-FROM node:20-alpine AS frontend-builder
+# 钉在构建机原生平台($BUILDPLATFORM)执行: dist 是纯静态产物与架构无关,
+# 无需为 arm64 在 QEMU 模拟下再跑一遍 tsc/vite (模拟下 CPU 密集构建慢 5~10 倍)。
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-builder
 ARG USE_CN_MIRROR=1
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 WORKDIR /build

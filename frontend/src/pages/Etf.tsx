@@ -4,6 +4,7 @@ import { Settings2, Database } from 'lucide-react'
 import { etfFundApi } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { FundFlowChart } from '@/components/etf/FundFlowChart'
+import { ZoneChart } from '@/components/etf/ZoneChart'
 import { EtfLeaderboard } from '@/components/etf/EtfLeaderboard'
 import { BroadEtfDialog } from '@/components/etf/BroadEtfDialog'
 import { EtfSyncCard } from '@/components/etf/EtfSyncCard'
@@ -110,6 +111,13 @@ export function Etf() {
           <div className="py-10 text-center text-sm text-muted">配置数据源后展示资金流图</div>
         )}
       </div>
+
+      {/* 指数风险/机会区卡片 */}
+      {configured && (
+        <div className="rounded-card border border-border bg-surface p-3">
+          <ZoneChart overlayIndex={overlayIndex} />
+        </div>
+      )}
 
       {/* 排行榜卡片 */}
       <div className="rounded-card border border-border bg-surface p-3">

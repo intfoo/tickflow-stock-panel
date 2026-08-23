@@ -63,10 +63,39 @@ export function EtfSyncCard() {
     },
   })
 
-  const [batchDays, setBatchDays] = useState(30)
+  // 批次大小 (月/批, 1~60) — 本地草稿 + 失焦/回车持久化到后端 config
+  const [batchDraft, setBatchDraft] = useState('')
+  const [batchLoaded, setBatchLoaded] = useState(false)
+  useEffect(() => {
+    if (!batchLoaded && config) {
+      setBatchDraft(String(config.batch_months ?? 1))
+      setBatchLoaded(true)
+    }
+  }, [config, batchLoaded])
+
+  const saveBatchMutation = useMutation({
+    mutationFn: (months: number) => etfFundApi.putConfig({ batch_months: months }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.etfFundConfig })
+      toast('批次大小已保存', 'success')
+    },
+  })
+
+  const batchMonths = () => Math.max(1, Math.min(60, Math.floor(Number(batchDraft) || 1)))
+
+  const saveBatch = () => {
+    const n = Math.floor(Number(batchDraft) || 0)
+    if (n < 1 || n > 60) {
+      toast('批次大小需在 1~60 个月之间', 'error')
+      setBatchDraft(String(config?.batch_months ?? 1))
+      return
+    }
+    setBatchDraft(String(n))
+    if (n !== (config?.batch_months ?? 1)) saveBatchMutation.mutate(n)
+  }
 
   const syncMutation = useMutation({
-    mutationFn: (body: { mode: 'incremental' | 'backfill'; start?: string; end?: string; batch_days?: number }) =>
+    mutationFn: (body: { mode: 'incremental' | 'backfill'; start?: string; end?: string; batch_months?: number }) =>
       etfFundApi.postSync(body),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: QK.etfFundStatus })
@@ -88,7 +117,7 @@ export function EtfSyncCard() {
       toast('开始日期不能晚于结束日期', 'error')
       return
     }
-    syncMutation.mutate({ mode: 'backfill', start: backfillStart, end: backfillEnd, batch_days: batchDays })
+    syncMutation.mutate({ mode: 'backfill', start: backfillStart, end: backfillEnd, batch_months: batchMonths() })
   }
 
   const backfillRunning = status?.backfill?.running ?? false
@@ -182,12 +211,15 @@ export function EtfSyncCard() {
             <input
               type="number"
               min={1}
-              max={366}
-              value={batchDays}
-              onChange={e => setBatchDays(Math.max(1, Math.min(366, Number(e.target.value) || 30)))}
+              max={60}
+              value={batchDraft}
+              onChange={e => setBatchDraft(e.target.value)}
+              onBlur={saveBatch}
+              onKeyDown={e => { if (e.key === 'Enter') saveBatch() }}
+              disabled={saveBatchMutation.isPending}
               className="w-14 rounded border border-border bg-base px-1.5 py-0.5 text-xs text-secondary outline-none focus:border-accent"
             />
-            天/批
+            月/批
           </label>
         </div>
         <div className="flex items-center gap-2">

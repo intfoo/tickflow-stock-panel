@@ -280,3 +280,92 @@ def fund_flow(repo, days: int) -> dict:
              "data_end_date": end.isoformat()}
     return {"series": series, "stats": stats, "broad_count": len(broad),
             "is_default": is_default}
+
+
+def _rolling_pctile(vals: list[float | None], win: int = 250, min_obs: int = 60) -> list[float | None]:
+    """每个点在过去 win 个观测中的分位 (不足 min_obs 个有效值为 None)。"""
+    out: list[float | None] = [None] * len(vals)
+    for i, v in enumerate(vals):
+        if v is None:
+            continue
+        lo = max(0, i - win + 1)
+        w = [x for x in vals[lo:i + 1] if x is not None]
+        if len(w) < min_obs:
+            continue
+        out[i] = sum(1 for x in w if x <= v) / len(w)
+    return out
+
+
+def risk_zones(repo, index: str, days: int) -> dict:
+    """指数风险/机会区逐日判定 (2026-08-16 实证规则, 沪深300/上证双指数互证)。
+
+    - px_pct: close 在过去 250 交易日的分位 (不足 60 obs 为 null)
+    - i20: 20 交易日净流入和 (亿元); i20_pct: 其 250 日分位
+    - 机会区 opp:  px_pct<=0.33 且 i20_pct>=0.67 (低位托底承接, fwd60 +5.7%/62%)
+    - 风险区 risk: px_pct>=0.67 且 i20_pct>=0.67 (高位天量申购, fwd60 ≈0/50%)
+    - 底背离 div:  close 创 60 日新低 (严格低于前 60 日) 且 累计净流入 > 60 日前
+      (fwd60 +8.6%/69%)
+    """
+    empty = {"index": index, "series": []}
+    if repo is None:
+        return empty
+    broad, _ = effective_broad(repo.get_etf_instruments())
+    inflow = store.read_inflow()
+    if inflow.is_empty() or not broad:
+        return empty
+    inflow = inflow.filter(pl.col("code").is_in(list(broad)))
+    if inflow.is_empty():
+        return empty
+    end = inflow["trade_date"].max()
+    data_start = inflow["trade_date"].min()
+    start = end - timedelta(days=max(days, 60) * 2 + 30)
+    cal = [d for d in trading_calendar(repo, start, end) if data_start <= d <= end]
+    daily = inflow.group_by("trade_date").agg(pl.col("inflow_amount").sum() / 1e4)  # 万元→亿元
+    base = (
+        pl.DataFrame({"trade_date": cal})
+        .join(daily, on="trade_date", how="left")
+        .with_columns(pl.col("inflow_amount").fill_null(0.0))
+        .sort("trade_date")
+    )
+    try:
+        px = repo.get_index_daily(index, start, end, ["date", "close"])
+    except Exception as e:
+        logger.debug("risk_zones index daily failed: %s", e)
+        return empty
+    if px.is_empty() or "close" not in px.columns:
+        return empty
+    df = base.join(px.rename({"date": "trade_date"}), on="trade_date", how="inner").sort("trade_date")
+    if df.height < 61:
+        return empty
+
+    close: list[float | None] = df["close"].to_list()
+    i20: list[float | None] = df["inflow_amount"].rolling_sum(20).to_list()
+    obv: list[float] = df["inflow_amount"].cum_sum().to_list()
+    px_pct = _rolling_pctile(close)
+    i20_pct = _rolling_pctile(i20)
+
+    rows = df.select(["trade_date"]).to_dicts()
+    series = []
+    for i, r in enumerate(rows):
+        p, q = px_pct[i], i20_pct[i]
+        zone = None
+        if p is not None and q is not None:
+            if p <= 0.33 and q >= 0.67:
+                zone = "opp"
+            elif p >= 0.67 and q >= 0.67:
+                zone = "risk"
+        div = (i >= 60 and close[i] is not None
+               and close[i] < min(close[i - 60:i])
+               and obv[i] > obv[i - 60])
+        series.append({
+            "trade_date": r["trade_date"].isoformat(),
+            "close": round(close[i], 2) if close[i] is not None else None,
+            "i20": round(i20[i], 2) if i20[i] is not None else None,
+            "i20_pct": round(q, 4) if q is not None else None,
+            "px_pct": round(p, 4) if p is not None else None,
+            "zone": zone,
+            "div": div,
+        })
+    if days and len(series) > days:
+        series = series[-days:]
+    return {"index": index, "series": series}
