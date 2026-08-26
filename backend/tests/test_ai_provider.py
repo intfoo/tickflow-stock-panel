@@ -4,6 +4,7 @@ import tomllib
 
 import httpx
 import openai
+import pytest
 
 from app import secrets_store
 from app.api import settings as settings_api
@@ -277,6 +278,126 @@ def test_ai_settings_keep_provider_models_separate(monkeypatch):
     assert stored["ai_model"] == "new-custom-model"
     assert stored["ai_reasoning_effort"] == "vendor-high"
     assert stored["ai_codex_model"] == "gpt-5.6-sol"
+# ── 输出上限 / 上下文窗口配置 ─────────────────────────────────
+
+
+def test_resolve_max_tokens_none_stays_unlimited(monkeypatch):
+    """None = 不传上限(推理模型放开) — 不能被映射成配置上限, 见 main 语义。"""
+    monkeypatch.setattr(ai_provider, "current_ai_max_output_tokens", lambda: 8192)
+    assert ai_provider._resolve_max_tokens(None) is None
+
+
+def test_resolve_max_tokens_clamps_above_cap(monkeypatch):
+    monkeypatch.setattr(ai_provider, "current_ai_max_output_tokens", lambda: 3000)
+    assert ai_provider._resolve_max_tokens(9000) == 3000
+
+
+def test_resolve_max_tokens_keeps_below_cap(monkeypatch):
+    monkeypatch.setattr(ai_provider, "current_ai_max_output_tokens", lambda: 8192)
+    assert ai_provider._resolve_max_tokens(2000) == 2000
+
+
+def test_estimate_input_tokens_counts_cjk_and_ascii():
+    # 中文按 1 字 1 token
+    cjk = [{"role": "user", "content": "中文" * 100}]  # 200 字
+    assert ai_provider._estimate_input_tokens(cjk) >= 200
+    # 英文按 ~4 字符 1 token
+    ascii_msg = [{"role": "user", "content": "a" * 400}]
+    assert ai_provider._estimate_input_tokens(ascii_msg) <= 200
+
+
+def test_check_input_budget_raises_when_over_window(monkeypatch):
+    monkeypatch.setattr(ai_provider, "current_ai_context_window", lambda: 100)
+    big = [{"role": "user", "content": "中" * 200}]  # 估算输入 ~200 tokens
+    with pytest.raises(ValueError, match="上下文窗口"):
+        ai_provider._check_input_budget(big, max_tokens=3000)
+
+
+def test_check_input_budget_passes_within_window(monkeypatch):
+    monkeypatch.setattr(ai_provider, "current_ai_context_window", lambda: 64000)
+    small = [{"role": "user", "content": "中" * 100}]
+    # 不抛异常
+    ai_provider._check_input_budget(small, max_tokens=2000)
+
+
+@pytest.mark.asyncio
+async def test_generate_ai_text_clamps_max_tokens_to_config_cap(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(ai_provider, "is_codex_cli_provider", lambda: False)
+    monkeypatch.setattr(ai_provider, "current_ai_max_output_tokens", lambda: 3000)
+    monkeypatch.setattr(ai_provider, "current_ai_context_window", lambda: 64000)
+
+    async def fake_run(messages, *, temperature, max_tokens, timeout):
+        captured["max_tokens"] = max_tokens
+        return "ok"
+
+    monkeypatch.setattr(ai_provider, "_run_openai_once", fake_run)
+    text = await ai_provider.generate_ai_text(
+        [{"role": "user", "content": "hi"}], max_tokens=9000
+    )
+    assert text == "ok"
+    assert captured["max_tokens"] == 3000
+
+
+@pytest.mark.asyncio
+async def test_generate_ai_text_default_cap_and_none_passthrough(monkeypatch):
+    """默认 3000 且被钳制; 显式 None 贯穿为不限制。"""
+    captured: dict = {}
+    monkeypatch.setattr(ai_provider, "is_codex_cli_provider", lambda: False)
+    monkeypatch.setattr(ai_provider, "current_ai_max_output_tokens", lambda: 4000)
+    monkeypatch.setattr(ai_provider, "current_ai_context_window", lambda: 64000)
+
+    async def fake_run(messages, *, temperature, max_tokens, timeout):
+        captured["max_tokens"] = max_tokens
+        return "ok"
+
+    monkeypatch.setattr(ai_provider, "_run_openai_once", fake_run)
+    await ai_provider.generate_ai_text([{"role": "user", "content": "hi"}])
+    assert captured["max_tokens"] == 3000  # 默认值, 未超 cap 原样下发
+    await ai_provider.generate_ai_text(
+        [{"role": "user", "content": "hi"}], max_tokens=None,
+    )
+    assert captured["max_tokens"] is None  # None = 推理模型放开, 不钳制
+
+
+def test_save_ai_settings_persists_token_sizes(monkeypatch):
+    from app.api import settings as settings_api
+    from app.config import settings as app_settings
+
+    saved: dict = {}
+    monkeypatch.setattr(settings_api.secrets_store, "save", lambda updates: saved.update(updates))
+    monkeypatch.setattr(settings_api.secrets_store, "load", lambda: saved)
+    original_output = app_settings.ai_max_output_tokens
+    original_window = app_settings.ai_context_window
+    try:
+        req = settings_api.AiSettingsIn(
+            provider="openai_compat",
+            base_url="https://example.com/v1",
+            api_key="sk-test",
+            model="gpt-x",
+            max_output_tokens=5000,
+            context_window=128000,
+        )
+        result = settings_api.save_ai_settings(req)
+        assert saved["ai_max_output_tokens"] == 5000
+        assert saved["ai_context_window"] == 128000
+        assert result["ai_max_output_tokens"] == 5000
+        assert result["ai_context_window"] == 128000
+    finally:
+        app_settings.ai_max_output_tokens = original_output
+        app_settings.ai_context_window = original_window
+
+
+def test_save_ai_settings_rejects_non_positive(monkeypatch):
+    from app.api import settings as settings_api
+    from fastapi import HTTPException
+
+    req = settings_api.AiSettingsIn(provider="openai_compat", max_output_tokens=-1)
+    with pytest.raises(HTTPException):
+        settings_api.save_ai_settings(req)
+    req2 = settings_api.AiSettingsIn(provider="openai_compat", context_window=0)
+    with pytest.raises(HTTPException):
+        settings_api.save_ai_settings(req2)
 
 
 def test_codex_process_env_excludes_application_secrets(monkeypatch, tmp_path):
@@ -366,3 +487,79 @@ def test_codex_config_preserves_remote_provider_without_docker_rewrite(monkeypat
     assert provider["base_url"] == "https://custom.example/v1"
     assert provider["wire_api"] == "responses"
     assert provider["requires_openai_auth"] is True
+
+
+# ---- Codex CLI 可用性检测 (实跑 --version, 不再仅 which) ----
+
+
+class _FakeCompleted:
+    def __init__(self, returncode: int):
+        self.returncode = returncode
+        self.stdout = b""
+        self.stderr = b""
+
+
+def test_codex_cli_available_runs_version_check(monkeypatch):
+    """实跑 --version: 能发现 npm 壳存在但原生二进制跑不起来的情况。"""
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        return _FakeCompleted(0)
+
+    monkeypatch.setattr(ai_provider, "_codex_base_command", lambda: ["codex"])
+    monkeypatch.setattr(ai_provider.subprocess, "run", fake_run)
+    assert ai_provider.codex_cli_available() is True
+    assert calls == [["codex", "--version"]]
+
+
+def test_codex_cli_available_false_when_version_fails(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(ai_provider, "_codex_base_command", lambda: ["codex"])
+    monkeypatch.setattr(
+        ai_provider.subprocess, "run", lambda a, **k: _FakeCompleted(1)
+    )
+    assert ai_provider.codex_cli_available() is False
+    # 壳报 "Codex CLI not available" 这类非零退出同样判定不可用
+    monkeypatch.setattr(
+        ai_provider.subprocess,
+        "run",
+        lambda a, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired("codex", 1)),
+    )
+    assert ai_provider.codex_cli_available() is False
+
+
+def test_codex_cli_available_false_when_command_missing(monkeypatch):
+    def raise_not_found():
+        raise RuntimeError("未找到 Codex CLI 命令: codex")
+
+    monkeypatch.setattr(ai_provider, "_codex_base_command", raise_not_found)
+    assert ai_provider.codex_cli_available() is False
+
+
+@pytest.mark.asyncio
+async def test_codex_exec_args_exclude_ephemeral(monkeypatch):
+    """exec 参数不含 --ephemeral: 老版本 codex(如 0.58)无此参数, 传了直接报错。"""
+    captured: dict = {}
+
+    def fake_run_process(args, prompt, env, timeout):
+        captured["args"] = list(args)
+        return 0, b"ok", b""
+
+    monkeypatch.setattr(ai_provider, "_codex_base_command", lambda: ["codex"])
+    monkeypatch.setattr(ai_provider, "_prepare_codex_home", lambda p: None)
+    monkeypatch.setattr(ai_provider, "_codex_process_env", lambda p: {})
+    monkeypatch.setattr(ai_provider, "_run_codex_process", fake_run_process)
+    monkeypatch.setattr(ai_provider, "_read_output_file", lambda p: "ok")
+    monkeypatch.setattr(ai_provider, "_remove_tree_best_effort", lambda p: None)
+    monkeypatch.setattr(ai_provider, "current_ai_model", lambda: "gpt-5.6-sol")
+
+    out = await ai_provider._run_codex_cli(
+        [{"role": "user", "content": "hi"}], max_tokens=None, timeout=1.0,
+    )
+    assert out == "ok"
+    args = captured["args"]
+    assert "--ephemeral" not in args
+    assert "exec" in args and "--skip-git-repo-check" in args
+    assert args[args.index("--model") + 1] == "gpt-5.6-sol"
