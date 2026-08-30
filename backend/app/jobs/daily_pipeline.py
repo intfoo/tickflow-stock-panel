@@ -107,6 +107,18 @@ def run_instruments_sync(repo: KlineRepository) -> dict:
     return {"instruments_rows": rows}
 
 
+def _can_sync_etf_adj(capset: CapabilitySet) -> bool:
+    """ETF 除权因子同步门槛 — 对齐股票路径 (Step 1.5) 与 extend_history ETF 分支:
+    TickFlow ADJ_FACTOR 能力, 或配置了非 tickflow 的复权数据源 (自定义源不需要
+    TickFlow 能力)。此前只查 capset.has(Cap.ADJ_FACTOR), 用自定义源的无 Key 部署
+    会永远跳过 ETF 因子同步 (线上实证: 2026-08-30 管道 etf_adj_factor_symbols=0)。
+    """
+    provider = _prefs.get_adj_factor_provider()
+    if provider == "same_as_daily":
+        provider = _prefs.get_etf_data_provider_resolved()
+    return capset.has(Cap.ADJ_FACTOR) or provider != "tickflow"
+
+
 def run_now(
     repo: KlineRepository,
     capset: CapabilitySet,
@@ -483,7 +495,7 @@ def run_now(
                 etf_inst = repo.get_etf_instruments()
                 if not etf_inst.is_empty() and "symbol" in etf_inst.columns:
                     etf_symbols = sorted(set(etf_inst["symbol"].to_list()))
-                if etf_symbols and capset.has(Cap.ADJ_FACTOR):
+                if etf_symbols and _can_sync_etf_adj(capset):
                     try:
                         emit("sync_index", 88, "同步 ETF 除权因子…")
                         from datetime import datetime

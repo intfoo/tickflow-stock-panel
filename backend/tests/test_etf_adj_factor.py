@@ -284,6 +284,28 @@ def test_recompute_etf_enriched_skips_when_factors_missing(tmp_path):
 
 
 # ──────────────────────────────────────────────────────────
+# Fix 5: daily_pipeline ETF 除权门槛 — 自定义源放行 (对齐股票路径)
+# ──────────────────────────────────────────────────────────
+
+
+def test_daily_pipeline_etf_adj_gate(monkeypatch):
+    """_can_sync_etf_adj: TickFlow 能力 或 非 tickflow 复权源 → True;
+    仅 tickflow 且无能力 → False (线上 None 档 + amazingdata 自定义源必须放行)。"""
+    from app.jobs import daily_pipeline
+
+    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "same_as_daily")
+    monkeypatch.setattr(preferences, "get_etf_data_provider_resolved", lambda: "amazingdata")
+    no_cap = types.SimpleNamespace(has=lambda cap: False)
+    assert daily_pipeline._can_sync_etf_adj(no_cap) is True
+
+    monkeypatch.setattr(preferences, "get_etf_data_provider_resolved", lambda: "tickflow")
+    assert daily_pipeline._can_sync_etf_adj(no_cap) is False
+
+    with_cap = types.SimpleNamespace(has=lambda cap: True)
+    assert daily_pipeline._can_sync_etf_adj(with_cap) is True
+
+
+# ──────────────────────────────────────────────────────────
 # Fix 3b: extend_history ETF 分支因子晚到 → 触发实际重算
 # ──────────────────────────────────────────────────────────
 
