@@ -636,3 +636,24 @@ def test_matrix_cache_preserves_trades_daily_equity_and_core_stats():
         assert cached.stats[name] == uncached.stats[name]
         assert cached_again.stats[name] == uncached.stats[name]
     assert cached_again.stats["matrix_compute_cache"]["hits"] > 0
+
+
+def test_normalize_score_range_allows_negative_min():
+    """最小评分允许负值(matrix_native 策略评分可为负); 最大评分维持 0~100 钳制。"""
+    score_min, score_max = StrategyBacktestService._normalize_score_range(-5, None)
+    assert score_min == -5.0
+    assert score_max is None
+
+    # 下限地板 -1e6
+    score_min, _ = StrategyBacktestService._normalize_score_range(-2e6, None)
+    assert score_min == -1e6
+
+    # 上限维持 [0, 100]
+    _, score_max = StrategyBacktestService._normalize_score_range(None, 150)
+    assert score_max == 100.0
+    _, score_max = StrategyBacktestService._normalize_score_range(None, -3)
+    assert score_max == 0.0
+
+    # min > max 仍交换兜底
+    score_min, score_max = StrategyBacktestService._normalize_score_range(80, 20)
+    assert (score_min, score_max) == (20.0, 80.0)

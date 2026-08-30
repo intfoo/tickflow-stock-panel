@@ -2033,7 +2033,10 @@ class StrategyBacktestService:
 
     @staticmethod
     def _normalize_score_range(min_value, max_value) -> tuple[float | None, float | None]:
-        def _bound(value) -> float | None:
+        # 最小评分允许负值: matrix_native 策略的评分是任意浮点(如 OLS 斜率评分可为负),
+        # 下限过滤常用于排除深负分区; 下限地板 -1e6 与引擎无效评分哨兵同量级。
+        # 最大评分维持 0~100 钳制(经典策略评分口径)。
+        def _bound(value, floor: float) -> float | None:
             if value is None or value == "":
                 return None
             try:
@@ -2042,10 +2045,10 @@ class StrategyBacktestService:
                 return None
             if not np.isfinite(score):
                 return None
-            return min(max(score, 0.0), 100.0)
+            return min(max(score, floor), 100.0)
 
-        score_min = _bound(min_value)
-        score_max = _bound(max_value)
+        score_min = _bound(min_value, -1e6)
+        score_max = _bound(max_value, 0.0)
         if score_min is not None and score_max is not None and score_min > score_max:
             score_min, score_max = score_max, score_min
         return score_min, score_max

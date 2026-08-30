@@ -2599,7 +2599,7 @@ export function StrategyBacktest() {
                         <span className="mb-1 block text-[11px] text-secondary">最小评分</span>
                         <NumberField
                           value={overrides.score_min == null ? null : Number(overrides.score_min)}
-                          min={0} max={100} step={1} placeholder="不限"
+                          min={-1000000} max={100} step={1} placeholder="不限"
                           onChange={n => updateOverride('score_min', n)}
                           className={INPUT_CLS}
                         />
@@ -2614,7 +2614,7 @@ export function StrategyBacktest() {
                         />
                       </label>
                     </div>
-                    <div className="mt-2 text-[10px] leading-4 text-muted">例如最小值 71 表示只把评分 ≥ 71 的股票放入下一交易日买入预选池。</div>
+                    <div className="mt-2 text-[10px] leading-4 text-muted">例如最小值 71 表示只把评分 ≥ 71 的股票放入下一交易日买入预选池。最小值支持负数（Matrix 策略评分可为负，可用于排除深负分区）。</div>
                   </div>
                 </ConfigSection>
               )}
