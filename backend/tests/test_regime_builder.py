@@ -488,6 +488,37 @@ def test_scan_enriched_fallback_excludes_st_symbols(tmp_path, monkeypatch):
     assert d2_f["up_count"] == 1
 
 
+def test_aggregate_daily_tolerates_inf_change_pct() -> None:
+    """回归: enriched 脏数据(inf change_pct)不得中断聚合/分类, 也不得持久化 inf。
+
+    线上事故(2026-08-30 二轮): 增量管道写出的分区含 inf change_pct,
+    mean 聚合出 avg_pct=inf → classify_state 内 _score 的 round(inf) 抛
+    OverflowError(cannot convert float infinity to integer) →
+    _scan_enriched_fallback 吞异常, 全量回填静默失败。
+    """
+    import json
+    import math
+
+    df = pl.DataFrame({
+        "symbol": ["A", "B", "C"],
+        "date": [date(2026, 8, 28)] * 3,
+        "change_pct": [0.02, float("inf"), -0.01],
+        "close": [10.0, 11.0, 9.0],
+        "amount": [1e7, 1e7, 1e7],
+    })
+    out = regime_builder._aggregate_daily(df, {})
+    assert out.height == 1
+    row = out.row(0, named=True)
+    for col in ("avg_pct", "median_pct", "index_pct", "total_amount", "avg_turnover"):
+        assert math.isfinite(row[col]), col
+    assert 0 <= row["score"] <= 100
+    json.dumps(out.to_dicts(), default=str)  # 不抛 ValueError(default=str 处理 date 类型)
+
+    # _score 本身对非有限值免疫
+    assert regime_builder._score(float("inf"), -1.2, 1.3) >= 0
+    assert regime_builder._score(float("nan"), 21, 75) >= 0
+
+
 # ───────────────────────── 回测环境过滤(T-1 防未来函数) ─────────────────────────
 
 

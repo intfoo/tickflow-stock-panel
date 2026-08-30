@@ -14,12 +14,28 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date
 from pathlib import Path
 
 import polars as pl
 
 logger = logging.getLogger(__name__)
+
+
+def _finite(value, default: float = 0.0) -> float:
+    """非有限值(NaN/±Inf/None/非数值) → default。
+
+    enriched 脏数据(如增量管道写出的分区含 inf change_pct)会经 mean/median
+    聚合进 avg_pct 等指标, 必须在此处拦截: 否则 round(inf) 抛 OverflowError
+    (cannot convert float infinity to integer)中断全量回填, 且 inf 会持久化进
+    regime parquet, 下游 JSON 响应再炸 "Out of range float values"。
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return v if math.isfinite(v) else default
 
 # ───────────────────────── 状态分类阈值(可调) ─────────────────────────
 # 评分模型对齐看板情绪分(market_overview_builder): 采用 _score(low,high) 归一化
@@ -57,7 +73,8 @@ def _score(value: float, low: float, high: float) -> float:
     """
     if high <= low:
         return 50.0
-    return float(max(0, min(100, round((value - low) / (high - low) * 100))))
+    x = _finite(value)
+    return float(max(0, min(100, round((x - low) / (high - low) * 100))))
 
 
 def _compute_subscores(metrics: dict) -> dict:
@@ -257,8 +274,8 @@ def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.
         down_pct = (down / total * 100) if total > 0 else 0.0
         strong_up_pct = ((r.get("strong_up_count", 0) or 0) / total * 100) if total > 0 else 0.0
         strong_down_pct = ((r.get("strong_down_count", 0) or 0) / total * 100) if total > 0 else 0.0
-        avg_pct = r.get("avg_pct", 0.0) or 0.0
-        median_pct = r.get("median_pct", 0.0) or 0.0
+        avg_pct = _finite(r.get("avg_pct"))
+        median_pct = _finite(r.get("median_pct"))
         metrics = {
             "limit_up": limit_up,
             "limit_down": r.get("limit_down", 0) or 0,
@@ -268,10 +285,10 @@ def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.
             "up_count": up,
             "down_count": down,
             "up_ratio": (up / down) if down > 0 else (float(up) if up > 0 else 1.0),
-            "index_pct": index_pct_map.get(r["date"], 0.0),
+            "index_pct": _finite(index_pct_map.get(r["date"], 0.0)),
             "above_ma20_pct": ma20_above,
-            "total_amount": r.get("total_amount", 0) or 0,
-            "avg_turnover": r.get("avg_amount", 0) or 0,
+            "total_amount": _finite(r.get("total_amount")),
+            "avg_turnover": _finite(r.get("avg_amount")),
             # 新模型所需(对齐看板)
             "up_pct": up_pct,
             "down_pct": down_pct,
