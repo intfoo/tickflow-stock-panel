@@ -156,11 +156,14 @@ export function Screener() {
 
   const dataStatus = useDataStatus({ staleTime: 0 })
 
+  // 日期范围跟随资产类型: 股票/ETF 各有独立 enriched 表, 最新交易日可能不同
+  const activeEnriched = assetType === 'etf' ? dataStatus.data?.etf_enriched : dataStatus.data?.enriched
+
   // 默认日期 = enriched 最新日期（始终跟随最新）
   useEffect(() => {
-    const latest = dataStatus.data?.enriched?.latest_date
+    const latest = activeEnriched?.latest_date
     if (latest) setAsOf(latest)
-  }, [dataStatus.data?.enriched?.latest_date])
+  }, [activeEnriched?.latest_date])
 
   const strategyPresets = useMemo(
     () => (strategies.data?.presets ?? []).filter(s => s.asset_types.includes(assetType)),
@@ -477,10 +480,9 @@ export function Screener() {
     setActiveStrategy(s.id)
     setShowAll(false)
     if (result?.strategy !== s.id || result.as_of !== asOf) setResult(null)
-    // ETF 模式: 无股票盘后缓存, 始终实时单跑。
-    // 传空日期让后端用 ETF 自己的最新交易日 (asOf 跟随的是股票 enriched, 两者可能不同日)。
+    // ETF 模式: 无盘后缓存, 始终实时单跑; asOf 已跟随 ETF enriched (见 activeEnriched)。
     if (assetType !== 'stock') {
-      run.mutate({ id: s.id, date: '' })
+      run.mutate({ id: s.id, date: asOf })
       return
     }
     // 摘要命中时由 singleCachedQuery 按需加载明细；缺失时才单独计算。
@@ -493,10 +495,14 @@ export function Screener() {
     setAsOf(newDate)
     runAllDateRef.current = null
     setResult(null)
+    // ETF 模式: 无缓存/auto-run 链路, 已选策略时直接以新日期重跑
+    if (assetType !== 'stock' && activeStrategy) {
+      run.mutate({ id: activeStrategy, date: newDate })
+    }
   }
 
-  const minDate = dataStatus.data?.enriched?.earliest_date ?? ''
-  const maxDate = dataStatus.data?.enriched?.latest_date ?? ''
+  const minDate = activeEnriched?.earliest_date ?? ''
+  const maxDate = activeEnriched?.latest_date ?? ''
 
   const batchAdd = useWatchlistBatchAdd()
 
@@ -537,6 +543,12 @@ export function Screener() {
       if (asOf) requestRunAll({ date: asOf })
     },
   })
+
+  // 股票模式 + 自动运行关闭 + 所选日期未被缓存覆盖 → 提示手动触发
+  // (重跑后缓存 as_of 跟上所选日期, 提示自动消失)
+  const showDateHint = assetType === 'stock' && !screenerAutoRun && !!asOf
+    && !!summaryQuery.data && summaryQuery.data.as_of !== asOf
+    && !runAll.isPending && !reloadStrategies.isPending && !run.isPending
 
   // 策略监控: 查询规则, 建立 strategyId → ruleId 映射 (只看 type=strategy 且 enabled)
   const monitorRules = useQuery({ queryKey: QK.monitorRules, queryFn: api.monitorRulesList })
@@ -858,6 +870,9 @@ export function Screener() {
                   </button>
                   {batchMsg && (
                     <span className="text-xs text-accent animate-pulse">{batchMsg}</span>
+                  )}
+                  {showDateHint && (
+                    <span className="text-xs text-accent">已选择 {asOf} · 点击「重载」或策略卡片以该日期重跑</span>
                   )}
                   {!showAll && result && result.elapsed_ms > 0 && (
                     <div className="flex items-center gap-2 text-xs text-muted">
