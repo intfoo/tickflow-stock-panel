@@ -163,7 +163,7 @@ def run_extend_history(
                 stage, 10 + int(15 * cur / tot),
                 f"ETF 除权因子批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True,
             )
-            written_adj, _ = kline_sync.sync_adj_factor(
+            written_adj, affected_etf = kline_sync.sync_adj_factor(
                 universe, repo, capset,
                 start_time=adj_start, end_time=adj_end,
                 asset_type="etf",
@@ -195,11 +195,17 @@ def run_extend_history(
         _invalidate("etf_daily")
         _invalidate("etf_enriched")
 
-        # ETF enriched 只写扩展区间窄表, 不重算旧区间: 若扩展区间新发现分红/拆分事件,
-        # 旧区间 enriched 前复权价会与新区间不连续, 给出可见提示 (设计决策, 见规格书风险3)
-        if written_adj > 0:
-            emit(stage, 85, f"提示: 新增 {written_adj} 条除权因子; 若扩展区间含分红/拆分, "
-                            "旧区间 enriched 前复权价可能不一致, 建议全量重同步 ETF 数据")
+        # 因子晚到(含扩展区间新发现的拆分/分红) → 受影响 ETF 全日期重算 enriched,
+        # 旧区间与新区间复权口径保持一致 (此前仅提示不重算: 拆分事件会让旧区间
+        # 保持未复权价, 回测在拆分点出现收益假暴跌)
+        if written_adj > 0 and affected_etf:
+            try:
+                index_sync.recompute_etf_enriched_for_symbols(repo, affected_etf)
+                emit(stage, 85, f"ETF enriched 重算完成,{len(affected_etf)} 只")
+            except Exception as e:
+                logger.warning("ETF enriched 重算失败: %s", e)
+                emit(stage, 85, f"提示: 新增 {written_adj} 条除权因子, enriched 重算失败({e}), "
+                                "建议全量重同步 ETF 数据")
 
         # 刷新视图
         emit(stage, 95, "刷新视图…")

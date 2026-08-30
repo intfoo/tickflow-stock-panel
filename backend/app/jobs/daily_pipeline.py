@@ -486,20 +486,11 @@ def run_now(
                 if etf_symbols and capset.has(Cap.ADJ_FACTOR):
                     try:
                         emit("sync_index", 88, "同步 ETF 除权因子…")
-                        from datetime import datetime, timedelta
+                        from datetime import datetime
                         adj_end = datetime.now()
-                        adj_path = repo.store.data_dir / "adj_factor_etf" / "all.parquet"
-                        fallback_start = adj_end - timedelta(days=30)
-                        adj_start = fallback_start
-                        if adj_path.exists():
-                            max_date = pl.scan_parquet(adj_path).select(pl.col("trade_date").max()).collect().item()
-                            if max_date is not None:
-                                if isinstance(max_date, str):
-                                    adj_start = datetime.combine(_date.fromisoformat(max_date), datetime.min.time())
-                                elif isinstance(max_date, datetime):
-                                    adj_start = datetime.combine(max_date.date(), datetime.min.time())
-                                else:
-                                    adj_start = datetime.combine(max_date, datetime.min.time())
+                        # 起点对齐股票语义: 因子表缺失/被污染 → ETF 日K最早日期全历史回补;
+                        # 否则 min(max(trade_date), 15天回看) 增量 (详见 index_sync.etf_adj_sync_start)
+                        adj_start = index_sync.etf_adj_sync_start(repo, etf_symbols, adj_end)
                         _, affected_etfs = index_sync.sync_etf_adj_factor(
                             etf_symbols,
                             repo,
@@ -509,6 +500,20 @@ def run_now(
                         )
                         etf_adj_symbols = len(affected_etfs)
                         emit("sync_index", 88, f"ETF 除权因子完成,{etf_adj_symbols} 只")
+                        if affected_etfs:
+                            _refresh_single_view(repo, "adj_factor_etf")
+                            # 前复权语义: 新除权事件改变受影响标的全部历史复权价,
+                            # 增量日K同步只重算新日期分区 → 必须全日期重算受影响标的
+                            # (对齐股票 run_pipeline(symbols=affected) 的行为)
+                            try:
+                                recomputed = index_sync.recompute_etf_enriched_for_symbols(
+                                    repo, affected_etfs,
+                                )
+                                if recomputed:
+                                    emit("sync_index", 88, f"ETF enriched 重算完成,{len(affected_etfs)} 只")
+                            except Exception as e:
+                                logger.warning("ETF enriched 重算失败: %s", e)
+                                stage_errors.append(f"ETF enriched recompute: {e}")
                     except Exception as e:  # noqa: BLE001
                         logger.warning("ETF adj_factor skipped: %s", e)
                         stage_errors.append(f"ETF adj_factor: {e}")

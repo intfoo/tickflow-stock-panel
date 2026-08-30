@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import gc
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import polars as pl
 
@@ -257,12 +257,114 @@ def sync_and_persist_index_daily(
 def _load_etf_factors(repo: KlineRepository) -> pl.DataFrame:
     factor_path = repo.store.data_dir / "adj_factor_etf" / "all.parquet"
     if not factor_path.exists():
+        logger.warning("ETF 复权因子表不存在, ETF enriched 将不做前复权 (%s)", factor_path)
         return pl.DataFrame()
     try:
         return pl.read_parquet(factor_path)
     except Exception as e:  # noqa: BLE001
         logger.warning("ETF 复权因子读取失败: %s", e)
         return pl.DataFrame()
+
+
+def etf_adj_sync_start(
+    repo: KlineRepository,
+    etf_symbols: list[str],
+    adj_end: datetime,
+    lookback_days: int = 15,
+) -> datetime:
+    """ETF 除权因子同步起点 — 对齐股票语义 (daily_pipeline Step 1.5)。
+
+    - 因子表缺失/为空/被污染(过滤到 ETF symbols 后无行) → ETF 日K最早日期,
+      全历史回补 (旧实现固定 30 天窗口, 历史拆分事件永远进不了因子表,
+      回测在拆分点出现收益假暴跌);
+    - 否则增量: min(max(trade_date), adj_end - lookback_days)。
+      回看兜底覆盖停机期间的新事件; sync_adj_factor merge+unique 幂等, 多拉无副作用。
+    """
+    adj_path = repo.store.data_dir / "adj_factor_etf" / "all.parquet"
+    max_date = None
+    if adj_path.exists():
+        try:
+            max_date = (
+                pl.scan_parquet(adj_path)
+                .filter(pl.col("symbol").is_in(etf_symbols))
+                .select(pl.col("trade_date").max())
+                .collect()
+                .item()
+            )
+        except Exception as e:
+            logger.warning("ETF adj_factor 读取失败, 按全历史回补: %s", e)
+            max_date = None
+    if max_date is None:
+        earliest = repo.earliest_etf_daily_date()
+        base = earliest or (adj_end.date() - timedelta(days=365))
+        return datetime.combine(base, datetime.min.time())
+    if isinstance(max_date, str):
+        max_d = date.fromisoformat(max_date)
+    elif isinstance(max_date, datetime):
+        max_d = max_date.date()
+    else:
+        max_d = max_date
+    lookback_floor = adj_end - timedelta(days=lookback_days)
+    return min(datetime.combine(max_d, datetime.min.time()), lookback_floor)
+
+
+def recompute_etf_enriched_for_symbols(
+    repo: KlineRepository,
+    symbols: list[str],
+    on_chunk_done: Callable[[int, int], None] | None = None,
+) -> int:
+    """用最新 ETF 复权因子对指定 ETF 全日期重算 enriched (merge-upsert 覆写)。
+
+    前复权语义: 任一新除权事件都改变该标的**全部历史**的复权价, 而增量日K
+    同步只重算新写入的日期分区 → 历史分区保持旧(可能未复权的)价格。对齐股票
+    路径 run_pipeline(symbols=affected) 的"受影响个股全日期重算"。
+
+    数据源为本地 kline_etf_daily (不重新拉网络)。返回写入行数。
+    """
+    if not symbols:
+        return 0
+    factors = _load_etf_factors(repo)
+    if factors.is_empty():
+        logger.warning("ETF 复权因子为空, 跳过 enriched 重算 (避免覆写为未复权价)")
+        return 0
+    daily_dir = repo.store.data_dir / "kline_etf_daily"
+    if not daily_dir.exists():
+        return 0
+    daily_glob = str(daily_dir / "**" / "*.parquet")
+    total = 0
+    chunks = chunked(sorted(set(symbols)), 100)
+    for i, chunk in enumerate(chunks):
+        try:
+            raw = (
+                pl.scan_parquet(
+                    daily_glob,
+                    cast_options=pl.ScanCastOptions(integer_cast="allow-float"),
+                    extra_columns="ignore",
+                )
+                .filter(pl.col("symbol").is_in(chunk))
+                .collect()
+            )
+        except Exception as e:
+            logger.warning("ETF 日K读取失败, 跳过该批 (chunk %d/%d): %s", i + 1, len(chunks), e)
+            continue
+        if raw.is_empty():
+            continue
+        keep = [
+            c for c in ("symbol", "date", "open", "high", "low", "close", "volume", "amount")
+            if c in raw.columns
+        ]
+        raw = raw.select(keep).sort(["symbol", "date"])
+        batch_factors = factors.filter(pl.col("symbol").is_in(chunk))
+        enriched = compute_enriched(raw, factors=batch_factors, instruments=None)
+        repo.append_etf_enriched(enriched)
+        total += raw.height
+        del raw, batch_factors, enriched
+        gc.collect()
+        if on_chunk_done:
+            on_chunk_done(i + 1, len(chunks))
+    repo.refresh_index_views()
+    logger.info("ETF enriched 重算完成: %d 只标的, %d 行", len(symbols), total)
+    return total
 
 
 def sync_etf_adj_factor(

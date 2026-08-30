@@ -346,6 +346,40 @@ def _normalize_adj_factor(raw) -> pl.DataFrame:
     return df.select(cols).drop_nulls()
 
 
+def _filter_factor_response(df: pl.DataFrame, symbols: list[str], source: str) -> pl.DataFrame:
+    """把上游响应过滤到请求的 symbols, 防上游兜底数据污染因子表。
+
+    实证: amazing-data「列过滤未匹配→全量宽表」兜底会让请求 2 只 ETF 返回
+    全市场股票事件, 不过滤直接落盘 → adj_factor_etf 被数千只股票污染。
+    """
+    if df.is_empty() or "symbol" not in df.columns:
+        return df
+    filtered = df.filter(pl.col("symbol").is_in(symbols))
+    dropped = df.height - filtered.height
+    if dropped > 0:
+        extra = df.filter(~pl.col("symbol").is_in(symbols))["symbol"].unique().to_list()
+        logger.warning(
+            "adj_factor 响应含 %d 行非请求 symbol (%s), 已丢弃 (样例: %s)",
+            dropped, source, extra[:5],
+        )
+    return filtered
+
+
+def _prune_foreign_factor_rows(existing: pl.DataFrame, symbols: list[str], asset_type: str) -> pl.DataFrame:
+    """ETF 因子表自愈合: merge 前清掉非请求 symbol 的历史污染行。
+
+    只对 ETF 启用 —— 股票因子表必须保留已调出当前标的池个股的历史因子
+    (退市股复权仍需要), 不能按当前 universe prune。
+    """
+    if asset_type != "etf" or existing.is_empty() or "symbol" not in existing.columns:
+        return existing
+    pruned = existing.filter(pl.col("symbol").is_in(symbols))
+    dropped = existing.height - pruned.height
+    if dropped > 0:
+        logger.warning("adj_factor_etf 清理 %d 行非 ETF 标的污染数据", dropped)
+    return pruned
+
+
 def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                     capset: CapabilitySet,
                     start_time: datetime | None = None,
@@ -375,6 +409,7 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                 asset_type=asset_type,
                 on_chunk_done=on_chunk_done,
             )
+            new_data = _filter_factor_response(new_data, symbols, f"custom:{provider_name}")
             if new_data.is_empty():
                 return 0, []
             affected = new_data["symbol"].unique().to_list()
@@ -382,7 +417,7 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
             out = repo.store.data_dir / factor_dir / "all.parquet"
             out.parent.mkdir(parents=True, exist_ok=True)
             if out.exists():
-                existing = pl.read_parquet(out)
+                existing = _prune_foreign_factor_rows(pl.read_parquet(out), symbols, asset_type)
                 before = existing.height
                 merged = pl.concat([existing, new_data]).unique(
                     subset=["symbol", "trade_date"], keep="last",
@@ -441,6 +476,9 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         return 0, []
 
     new_data = pl.concat(all_dfs, how="diagonal_relaxed") if len(all_dfs) > 1 else all_dfs[0]
+    new_data = _filter_factor_response(new_data, symbols, "tickflow")
+    if new_data.is_empty():
+        return 0, []
 
     # 提取受影响的 symbol 列表(合并前)
     affected = new_data["symbol"].unique().to_list()
@@ -450,7 +488,7 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     out.parent.mkdir(parents=True, exist_ok=True)
 
     if out.exists():
-        existing = pl.read_parquet(out)
+        existing = _prune_foreign_factor_rows(pl.read_parquet(out), symbols, asset_type)
         before = existing.height
         merged = pl.concat([existing, new_data]).unique(
             subset=["symbol", "trade_date"], keep="last",
