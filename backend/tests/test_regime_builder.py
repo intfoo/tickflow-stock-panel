@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import date
+from datetime import date, timedelta
 
 import polars as pl
 import pytest
@@ -351,6 +351,141 @@ def test_scan_enriched_fallback_tolerates_partition_without_quote_ts(tmp_path, m
     out = regime_builder._scan_enriched_fallback(_FakeRepo(), date(2026, 1, 5), date(2026, 1, 6))
     assert out is not None and not out.is_empty()
     assert set(out["date"].to_list()) == {date(2026, 1, 5), date(2026, 1, 6)}
+
+
+def _write_enriched_partitions(enriched_dir, days, symbols_rows) -> None:
+    """symbols_rows: {symbol: [(date, close, consec), ...]} 写分区(含 quote_ts)。"""
+    schema = {
+        "symbol": pl.Utf8, "date": pl.Date,
+        "open": pl.Float64, "high": pl.Float64, "low": pl.Float64, "close": pl.Float64,
+        "volume": pl.Float64, "amount": pl.Float64,
+        "raw_close": pl.Float64, "raw_high": pl.Float64, "raw_low": pl.Float64,
+        "turnover_rate": pl.Float64,
+        "consecutive_limit_ups": pl.UInt32, "consecutive_limit_downs": pl.UInt32,
+        "quote_ts": pl.Int64,
+    }
+    for d in days:
+        data = {k: [] for k in schema}
+        for sym, rows in symbols_rows.items():
+            for rd, close, consec in rows:
+                if rd != d:
+                    continue
+                data["symbol"].append(sym)
+                data["date"].append(d)
+                data["open"].append(close)
+                data["high"].append(close)
+                data["low"].append(close)
+                data["close"].append(close)
+                data["volume"].append(1e6)
+                data["amount"].append(1e7)
+                data["raw_close"].append(close)
+                data["raw_high"].append(close)
+                data["raw_low"].append(close)
+                data["turnover_rate"].append(1.0)
+                data["consecutive_limit_ups"].append(consec)
+                data["consecutive_limit_downs"].append(0)
+                data["quote_ts"].append(0)
+        part = enriched_dir / f"date={d.isoformat()}"
+        part.mkdir(parents=True)
+        pl.DataFrame(data, schema=schema).write_parquet(part / "part.parquet")
+
+
+def test_scan_enriched_fallback_per_batch_aggregation_matches_full(tmp_path, monkeypatch):
+    """逐批聚合 == 旧路径「全量物化后一次聚合」(含跨批 _prev_consec 晋级率)。
+
+    内存优化回归: _scan_enriched_fallback 改为每批算完立即 _aggregate_daily 到日级,
+    只累积日级小帧。_aggregate_daily 全部聚合均为 group_by("date"), 跨日依赖
+    (_prev_consec)由 _compute_batch 的 warmup 前缀保证, 两种物化顺序结果必须逐行一致。
+    """
+    days = [date(2026, 1, 5) + timedelta(days=i) for i in range(5)]
+    symbols_rows = {
+        "A": [(d, 10.0 + i, c) for i, (d, c) in enumerate(zip(days, [0, 1, 2, 3, 0], strict=True))],
+        "B": [(d, 20.0 - i, c) for i, (d, c) in enumerate(zip(days, [1, 0, 1, 2, 3], strict=True))],
+        "C": [(d, 30.0 + i * 0.5, c) for i, (d, c) in enumerate(zip(days, [0, 0, 0, 1, 2], strict=True))],
+    }
+    enriched_dir = tmp_path / "kline_daily_enriched"
+    _write_enriched_partitions(enriched_dir, days, symbols_rows)
+
+    monkeypatch.setattr("app.services.preferences.get_regime_batch_days", lambda: 2)
+    monkeypatch.setattr("app.services.preferences.get_regime_warmup_days", lambda: 5)
+
+    class _FakeRepo:
+        class store:
+            data_dir = tmp_path
+        def get_instruments(self): return pl.DataFrame()
+        def get_historical_shares(self): return pl.DataFrame()
+
+    repo = _FakeRepo()
+    # 新路径: 逐批聚合(内部分批 (d1,d2),(d3,d4),(d5))
+    new = regime_builder._scan_enriched_fallback(repo, days[0], days[-1], index_pct_map={})
+    assert new is not None and not new.is_empty()
+
+    # 参考(旧路径): 逐批 _compute_batch 取 raw → 全量 concat → 一次聚合
+    batches = [(days[0], days[1]), (days[2], days[3]), (days[4], days[4])]
+    raw_parts = []
+    for bs, be in batches:
+        df = regime_builder._compute_batch(
+            repo, enriched_dir, pl.DataFrame(), pl.DataFrame(), bs, be, 5,
+        )
+        if not df.is_empty():
+            raw_parts.append(df)
+    ref = regime_builder._aggregate_daily(
+        pl.concat(raw_parts, how="vertical_relaxed"), {},
+    )
+
+    import polars.testing
+
+    polars.testing.assert_frame_equal(new.sort("date"), ref.sort("date"))
+    # 跨批晋级率生效: d3(第2批首日) 的 promo_pool 应包含 d2 的连板数
+    d3 = new.filter(pl.col("date") == days[2]).row(0, named=True)
+    assert d3["promo_pool"] >= 1
+
+
+def test_scan_enriched_fallback_excludes_st_symbols(tmp_path, monkeypatch):
+    """慢路径(fallback)的 ST 剔除: st_symbols 的行在逐批聚合前被过滤。
+
+    与缓存路径(test_run_regime_batch_excludes_st)同语义: 过滤 symbol 后按日聚合
+    ≡ 全量过滤后聚合。本用例直接对比传/不传 st_symbols 两种结果。
+    """
+    days = [date(2026, 1, 5) + timedelta(days=i) for i in range(2)]
+    symbols_rows = {
+        "STA": [(d, 10.0 + i, 3) for i, d in enumerate(days)],  # ST: 3 连板, 应被剔除
+        "OKB": [(d, 20.0 + i, 0) for i, d in enumerate(days)],
+    }
+    enriched_dir = tmp_path / "kline_daily_enriched"
+    _write_enriched_partitions(enriched_dir, days, symbols_rows)
+
+    monkeypatch.setattr("app.services.preferences.get_regime_batch_days", lambda: 60)
+    monkeypatch.setattr("app.services.preferences.get_regime_warmup_days", lambda: 40)
+
+    class _FakeRepo:
+        class store:
+            data_dir = tmp_path
+        def get_instruments(self): return pl.DataFrame()
+        def get_historical_shares(self): return pl.DataFrame()
+
+    repo = _FakeRepo()
+    unfiltered = regime_builder._scan_enriched_fallback(
+        repo, days[0], days[-1], index_pct_map={},
+    )
+    filtered = regime_builder._scan_enriched_fallback(
+        repo, days[0], days[-1], index_pct_map={}, st_symbols={"STA"},
+    )
+    assert unfiltered is not None and filtered is not None
+    assert unfiltered.height == filtered.height == 2
+
+    # 不过滤: STA 的 3 连板/首板进入梯队统计
+    for r in unfiltered.iter_rows(named=True):
+        assert r["max_consecutive"] == 3
+    # 过滤后: 只剩 OKB(连板 0), 梯队指标归零
+    for r in filtered.iter_rows(named=True):
+        assert r["max_consecutive"] == 0
+        assert r["first_board"] == 0
+    # 宽度指标同样只统计非 ST 行: 第 2 天两票都涨, 过滤后涨家数减半
+    d2_un = unfiltered.filter(pl.col("date") == days[1]).row(0, named=True)
+    d2_f = filtered.filter(pl.col("date") == days[1]).row(0, named=True)
+    assert d2_un["up_count"] == 2
+    assert d2_f["up_count"] == 1
 
 
 # ───────────────────────── 回测环境过滤(T-1 防未来函数) ─────────────────────────

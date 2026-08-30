@@ -325,20 +325,31 @@ _REGIME_WARMUP_DAYS_DEFAULT = 40
 
 
 def _compute_batch(repo, enriched_dir, instruments, historical_shares,
-                   batch_start: date, batch_end: date, warmup_days: int) -> pl.DataFrame:
+                   batch_start: date, batch_end: date, warmup_days: int,
+                   *, part_files: list[tuple[date, Path]] | None = None) -> pl.DataFrame:
     """单批: 读 [batch_start-warmup, batch_end] → 算指标 → 截断回 [batch_start, batch_end]。
 
     warmup 前缀保证每批边界的滚动窗口指标(ma20)正确, 不依赖相邻批次。
     返回目标区间(不含 warmup)的含指标列 DataFrame。
+    part_files: 预收集的 (日期, 分区路径) 清单; 传入时只扫本批窗口内的文件,
+    避免逐批对数千个分区做全量 glob + schema 解析。
     """
     from datetime import timedelta
     from app.indicators.pipeline import compute_indicators, compute_limit_signals
     from app.parquet import scan_enriched_parquet
     warmup_start = batch_start - timedelta(days=warmup_days)
+    if part_files is not None:
+        source: list[str] | str = [
+            str(p) for d, p in part_files if warmup_start <= d <= batch_end
+        ]
+        if not source:
+            return pl.DataFrame()
+    else:
+        source = str(enriched_dir / "**" / "*.parquet")
     # 必须走 scan_enriched_parquet(missing_columns="insert"): 个别分区可能缺列
     # (如增量管道写出的分区无 quote_ts), 裸 scan_parquet 在 schema 归一时直接抛错,
     # 会被 _scan_enriched_fallback 吞掉导致 regime 静默算出 0 天。
-    df = scan_enriched_parquet(str(enriched_dir / "**" / "*.parquet")).filter(
+    df = scan_enriched_parquet(source).filter(
         (pl.col("date") >= warmup_start) & (pl.col("date") <= batch_end)
     ).collect()
     if df.is_empty():
@@ -360,17 +371,24 @@ def _compute_batch(repo, enriched_dir, instruments, historical_shares,
     return df.filter((pl.col("date") >= batch_start) & (pl.col("date") <= batch_end))
 
 
-def _scan_enriched_fallback(repo, start: date, end: date) -> pl.DataFrame | None:
-    """缓存不覆盖时的慢路径: scan enriched parquet + 重算所需指标列。
+def _scan_enriched_fallback(repo, start: date, end: date, *,
+                            index_pct_map: dict | None = None,
+                            st_symbols: frozenset[str] | set[str] | None = None) -> pl.DataFrame | None:
+    """缓存不覆盖时的慢路径: scan enriched parquet → 重算指标 → 逐批聚合到日级。
 
-    仅在 regime 首次全量回填或缓存未预热时触发。返回含信号列的多日 DataFrame。
+    仅在 regime 首次全量回填或缓存未预热时触发。返回 regime 日级行(已聚合)。
 
-    内存控制(关键, 两层优化):
+    内存控制(三层优化):
     1. needed 白名单: regime 只需 change_pct/ma20/涨跌停信号等少数列, 不用 compute_all
        算 72 列全套指标(那会让全量峰值达 6.8GB)。
-    2. 分批: 范围超过 batch_days 个交易日时按批切片, 每批带 warmup 前缀算完后 concat。
-       batch_days / warmup_days 由用户偏好控制(数据页「市场环境」卡片设置),
-       实测默认值(60/40)全量(515万行)峰值约 1.9GB, 4GB 内存机器可稳跑。
+    2. 分批: 范围超过 batch_days 个交易日时按批切片, 每批带 warmup 前缀保证
+       ma20/_prev_consec 边界正确。batch_days / warmup_days 由用户偏好控制
+       (数据页「市场环境」卡片设置)。
+    3. 逐批聚合: 每批算完立即 _aggregate_daily 聚合到日级(几十行), 只累积日级小帧。
+       旧实现把全量 enriched(数百万行)整体物化 + concat(2 份)才聚合, 全量回填峰值
+       ~1.9GB; 逐批聚合后峰值 = 单批 enriched + 几千行日级帧, 降一个数量级。
+       _aggregate_daily 全部聚合均为 group_by("date"), 跨日依赖(_prev_consec)已在
+       _compute_batch 内用 warmup 前缀预计算, 逐批聚合与全量一次聚合结果等价。
     必须传入 instruments(涨跌停价表), 否则 compute_limit_signals 会跳过涨跌停信号。
     """
     try:
@@ -388,19 +406,39 @@ def _scan_enriched_fallback(repo, start: date, end: date) -> pl.DataFrame | None
         instruments = repo.get_instruments()
         historical_shares = repo.get_historical_shares()
 
+        # 分区清单一次性收集; 每批只扫本批窗口内的文件,
+        # 避免逐批对数千个分区做全量 glob + schema 解析
+        part_files: list[tuple[date, Path]] = []
+        for part in enriched_dir.glob("date=*/part.parquet"):
+            try:
+                part_files.append((date.fromisoformat(part.parent.name[5:]), part))
+            except ValueError:
+                continue
+        part_files.sort()
+
         # 收集目标区间内所有交易日, 决定是否分批
-        target_dates = sorted(d for d in enriched_date_set(repo)
-                              if start <= d <= end)
+        target_dates = [d for d, _ in part_files if start <= d <= end]
         if not target_dates:
             return None
+        st_list = sorted(st_symbols) if st_symbols else []
+
+        def _run_batch(bs: date, be: date) -> pl.DataFrame:
+            df = _compute_batch(repo, enriched_dir, instruments, historical_shares,
+                                bs, be, warmup_days, part_files=part_files)
+            if df.is_empty():
+                return pl.DataFrame()
+            if st_list and "symbol" in df.columns:
+                df = df.filter(
+                    ~pl.col("symbol").str.to_uppercase().is_in(st_list)
+                )
+            return _aggregate_daily(df, index_pct_map)
 
         # 小范围: 单次算(无分批开销)
         if len(target_dates) <= batch_days:
-            df = _compute_batch(repo, enriched_dir, instruments, historical_shares,
-                                target_dates[0], target_dates[-1], warmup_days)
-            return df if not df.is_empty() else None
+            daily = _run_batch(target_dates[0], target_dates[-1])
+            return daily if not daily.is_empty() else None
 
-        # 大范围: 按交易日分批, 逐批算 + concat
+        # 大范围: 按交易日分批, 逐批算 + 逐批聚合, 只累积日级小帧
         batches = [
             (target_dates[i], target_dates[min(i + batch_days - 1, len(target_dates) - 1)])
             for i in range(0, len(target_dates), batch_days)
@@ -409,9 +447,9 @@ def _scan_enriched_fallback(repo, start: date, end: date) -> pl.DataFrame | None
                     len(target_dates), len(batches), batch_days, warmup_days)
         parts: list[pl.DataFrame] = []
         for bs, be in batches:
-            df = _compute_batch(repo, enriched_dir, instruments, historical_shares, bs, be, warmup_days)
-            if not df.is_empty():
-                parts.append(df)
+            daily = _run_batch(bs, be)
+            if not daily.is_empty():
+                parts.append(daily)
         if not parts:
             return None
         return pl.concat(parts, how="vertical_relaxed")
@@ -435,7 +473,8 @@ def _load_index_pct(repo, start: date, end: date, symbol: str = "000001.SH") -> 
 def run_regime_batch(repo, start: date, end: date) -> pl.DataFrame:
     """批算 [start, end] 的环境时序。
 
-    性能: 优先 repo.get_enriched_range(内存缓存); 缓存不覆盖走 scan_parquet 慢路径。
+    性能: 优先 repo.get_enriched_range(内存缓存); 缓存不覆盖走 scan_parquet 慢路径
+    (慢路径内部逐批聚合到日级, 控制全量回填的内存峰值)。
     按 date group_by 聚合, 不逐日重算。返回完整时序 DataFrame(可能为空)。
     """
     if start > end:
@@ -443,15 +482,6 @@ def run_regime_batch(repo, start: date, end: date) -> pl.DataFrame:
 
     # 指数涨幅(主力指数)
     index_pct_map = _load_index_pct(repo, start, end)
-
-    # enriched 多日数据(优先缓存)
-    df = repo.get_enriched_range(start, end)
-    if df is None or df.is_empty():
-        logger.info("regime batch: enriched cache miss [%s~%s], fallback to scan", start, end)
-        df = _scan_enriched_fallback(repo, start, end)
-    if df is None or df.is_empty():
-        logger.info("regime batch: no enriched data for [%s~%s]", start, end)
-        return pl.DataFrame()
 
     # 口径: 默认剔除风险警示(ST)股(与主线统计同一开关) — 主板 ST 在 2026-07 前
     # 享 5% 涨跌幅且是跨行业状态桶, 混入会系统性抬高涨停宽度/高度(弱市炒 ST 尤甚)。
@@ -461,16 +491,31 @@ def run_regime_batch(repo, start: date, end: date) -> pl.DataFrame:
         exclude_st = _prefs_st.get_sentiment_exclude_st()
     except Exception:
         exclude_st = True
+    st_symbols: frozenset[str] = frozenset()
     if exclude_st:
         from app.services.market_mainline import load_risk_warning_symbols
 
-        st_syms = load_risk_warning_symbols(repo.store.data_dir)
-        if st_syms and "symbol" in df.columns:
-            df = df.filter(
-                ~pl.col("symbol").str.to_uppercase().is_in(sorted(st_syms))
-            )
+        st_symbols = load_risk_warning_symbols(repo.store.data_dir)
 
-    return _aggregate_daily(df, index_pct_map)
+    # enriched 多日数据(优先缓存)
+    df = repo.get_enriched_range(start, end)
+    if df is not None and not df.is_empty():
+        if st_symbols and "symbol" in df.columns:
+            df = df.filter(
+                ~pl.col("symbol").str.to_uppercase().is_in(sorted(st_symbols))
+            )
+        return _aggregate_daily(df, index_pct_map)
+
+    logger.info("regime batch: enriched cache miss [%s~%s], fallback to scan", start, end)
+    daily = _scan_enriched_fallback(
+        repo, start, end,
+        index_pct_map=index_pct_map,
+        st_symbols=st_symbols,
+    )
+    if daily is None or daily.is_empty():
+        logger.info("regime batch: no enriched data for [%s~%s]", start, end)
+        return pl.DataFrame()
+    return daily
 
 
 # ───────────────────────── 持久化(upsert) ─────────────────────────
