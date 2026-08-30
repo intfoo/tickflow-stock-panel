@@ -299,6 +299,60 @@ def test_compute_incremental_missing_dates(tmp_path):
     assert new.is_empty() or new.height >= 0
 
 
+def test_scan_enriched_fallback_tolerates_partition_without_quote_ts(tmp_path, monkeypatch):
+    """回归: 个别 enriched 分区缺 quote_ts 列时, 回填补算不能静默返回空。
+
+    生产事故(2026-08-28 线上): 当日分区由增量管道写出、缺 quote_ts 列,
+    _compute_batch 的裸 pl.scan_parquet 全量 glob 扫描在 schema 归一时抛
+    "did not find column quote_ts", 异常被 _scan_enriched_fallback 吞掉返回 None
+    → regime 增量/全量重算均产 0 天, regime 表停留在旧日期。
+    """
+    enriched_dir = tmp_path / "kline_daily_enriched"
+    schema = {
+        "symbol": pl.Utf8, "date": pl.Date,
+        "open": pl.Float64, "high": pl.Float64, "low": pl.Float64, "close": pl.Float64,
+        "volume": pl.Float64, "amount": pl.Float64,
+        "raw_close": pl.Float64, "raw_high": pl.Float64, "raw_low": pl.Float64,
+        "turnover_rate": pl.Float64,
+        "consecutive_limit_ups": pl.UInt32, "consecutive_limit_downs": pl.UInt32,
+    }
+
+    def _rows(d: date, with_quote_ts: bool) -> pl.DataFrame:
+        data = {
+            "symbol": ["A", "B"], "date": [d, d],
+            "open": [10.0, 20.0], "high": [11.0, 21.0], "low": [9.0, 19.0],
+            "close": [10.5, 20.5], "volume": [1e6, 2e6], "amount": [1e7, 2e7],
+            "raw_close": [10.5, 20.5], "raw_high": [11.0, 21.0], "raw_low": [9.0, 19.0],
+            "turnover_rate": [1.0, 2.0],
+            "consecutive_limit_ups": [0, 0], "consecutive_limit_downs": [0, 0],
+        }
+        sch = dict(schema)
+        if with_quote_ts:
+            data["quote_ts"] = [0, 0]
+            sch["quote_ts"] = pl.Int64
+        return pl.DataFrame(data, schema=sch)
+
+    d1 = enriched_dir / "date=2026-01-05"
+    d1.mkdir(parents=True)
+    _rows(date(2026, 1, 5), with_quote_ts=True).write_parquet(d1 / "part.parquet")
+    d2 = enriched_dir / "date=2026-01-06"
+    d2.mkdir(parents=True)
+    _rows(date(2026, 1, 6), with_quote_ts=False).write_parquet(d2 / "part.parquet")
+
+    monkeypatch.setattr("app.services.preferences.get_regime_batch_days", lambda: 60)
+    monkeypatch.setattr("app.services.preferences.get_regime_warmup_days", lambda: 40)
+
+    class _FakeRepo:
+        class store:
+            data_dir = tmp_path
+        def get_instruments(self): return pl.DataFrame()
+        def get_historical_shares(self): return pl.DataFrame()
+
+    out = regime_builder._scan_enriched_fallback(_FakeRepo(), date(2026, 1, 5), date(2026, 1, 6))
+    assert out is not None and not out.is_empty()
+    assert set(out["date"].to_list()) == {date(2026, 1, 5), date(2026, 1, 6)}
+
+
 # ───────────────────────── 回测环境过滤(T-1 防未来函数) ─────────────────────────
 
 

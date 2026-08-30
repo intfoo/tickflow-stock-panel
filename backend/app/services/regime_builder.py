@@ -333,8 +333,12 @@ def _compute_batch(repo, enriched_dir, instruments, historical_shares,
     """
     from datetime import timedelta
     from app.indicators.pipeline import compute_indicators, compute_limit_signals
+    from app.parquet import scan_enriched_parquet
     warmup_start = batch_start - timedelta(days=warmup_days)
-    df = pl.scan_parquet(enriched_dir / "**" / "*.parquet").filter(
+    # 必须走 scan_enriched_parquet(missing_columns="insert"): 个别分区可能缺列
+    # (如增量管道写出的分区无 quote_ts), 裸 scan_parquet 在 schema 归一时直接抛错,
+    # 会被 _scan_enriched_fallback 吞掉导致 regime 静默算出 0 天。
+    df = scan_enriched_parquet(str(enriched_dir / "**" / "*.parquet")).filter(
         (pl.col("date") >= warmup_start) & (pl.col("date") <= batch_end)
     ).collect()
     if df.is_empty():
