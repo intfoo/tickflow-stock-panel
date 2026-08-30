@@ -301,6 +301,47 @@ def test_build_overview_negative_side_stricter_threshold() -> None:
     assert main.thresholds[30] == (2.00, 0.70)
 
 
+def test_build_overview_nan_inf_sanitized() -> None:
+    """NaN/Inf 偏离与脏实时数据不得泄漏进响应。
+
+    线上事故(2026-08-30): 个股某窗口偏离为 NaN(指数缺行)而另一窗口有效入选时,
+    NaN 窗口字典原样进响应 → json.dumps 抛 ValueError → /api/abnormal/overview 500。
+    """
+    import json
+
+    with _hist_cache_lock:
+        _hist_cache.clear()
+    nan = float("nan")
+    df = pl.DataFrame(
+        {
+            "symbol": ["600000.SH"],
+            "name": ["股A"],
+            "close": [nan],
+            "change_pct": [nan],
+            "deviate_3d": [0.19],   # 有效窗口 → 行会入选
+            "deviate_10d": [nan],   # NaN 窗口必须被剔除
+            "deviate_30d": [float("inf")],  # Inf 同样剔除
+        }
+    )
+    result = build_overview(_FakeRepo(df), None, min_closeness=0.5)
+    row = result["rows"][0]
+    assert set(row["windows"].keys()) == {"3d"}
+    assert row["rt_pct"] is None
+    assert row["close"] is None
+    json.dumps(result)  # 不抛 ValueError
+
+    # 基准实时涨跌算出 inf (prev_close=0) 时回退 0, 不污染响应
+    class _BadQuotes:
+        def get_index_quotes(self):
+            return pl.DataFrame({"symbol": ["000001.SH"], "close": [3300.0], "prev_close": [0.0]})
+
+    with _hist_cache_lock:
+        _hist_cache.clear()
+    result2 = build_overview(_FakeRepo(df), _BadQuotes(), min_closeness=0.5)
+    assert result2["bench_rt_pct"] == 0.0
+    json.dumps(result2)
+
+
 # ── 监控规则接入 (type=abnormal) ────────────────────────
 
 import pytest

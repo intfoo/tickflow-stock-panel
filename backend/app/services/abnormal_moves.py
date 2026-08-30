@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -28,6 +29,22 @@ from typing import Any
 import polars as pl
 
 from app.indicators.pipeline import DEVIATION_WINDOWS
+
+
+def _finite_or_none(value: Any) -> float | None:
+    """非有限值(NaN/Inf/None/非数值) → None, 防止泄漏进 JSON 响应。
+
+    json.dumps 遇到 NaN/Inf 会抛 ValueError("Out of range float values"),
+    enriched/实时行情的脏数据(如指数缺行导致的 NaN 偏离、prev_close=0 的 inf)
+    必须在响应边界拦掉。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
 
 # ── 规则表 ────────────────────────────────────────────────
 
@@ -148,11 +165,13 @@ def _bench_rt_pct(quote_service: Any) -> float:
         if col in df.columns:
             vals = df[col].drop_nulls()
             if vals.len() > 0:
-                return float(vals.mean())
+                m = float(vals.mean())
+                return m if math.isfinite(m) else 0.0
     if {"close", "prev_close"} <= set(df.columns):
         sub = df.select(["close", "prev_close"]).drop_nulls()
         if sub.height > 0:
-            return float((sub["close"] / sub["prev_close"] - 1).mean())
+            m = float((sub["close"] / sub["prev_close"] - 1).mean())
+            return m if math.isfinite(m) else 0.0
     return 0.0
 
 
@@ -175,19 +194,21 @@ def build_overview(
     out_rows: list[dict[str, Any]] = []
     for symbol, base in hist_rows.items():
         rule = rule_for(symbol, base.get("name"))
-        rt_pct = base.get("rt_pct")
+        rt_pct = _finite_or_none(base.get("rt_pct"))
         rt_delta = 0.0 if includes_today else ((rt_pct or 0.0) - bench_rt)
 
         windows: dict[str, dict[str, Any]] = {}
         max_closeness = 0.0
         for n in DEVIATION_WINDOWS:
-            hist_dev = base.get(f"deviate_{n}d")
+            hist_dev = _finite_or_none(base.get(f"deviate_{n}d"))
             if hist_dev is None:
                 continue
             live = hist_dev + rt_delta
             up_t, down_t = rule.thresholds[n]
             threshold = up_t if live >= 0 else down_t
             closeness = abs(live) / threshold if threshold > 0 else 0.0
+            if not math.isfinite(closeness):
+                continue
             windows[f"{n}d"] = {
                 "value": round(live, 4),
                 "threshold": threshold,
@@ -201,7 +222,7 @@ def build_overview(
             "name": base.get("name"),
             "board": rule.board,
             "st": rule.st,
-            "close": base.get("close"),
+            "close": _finite_or_none(base.get("close")),
             "rt_pct": rt_pct,
             "windows": windows,
             "max_closeness": round(max_closeness, 4),
