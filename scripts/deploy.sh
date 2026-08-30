@@ -48,24 +48,22 @@ fi
 
 cd "$TARGET"
 
-echo "::group::🛑 2. 停止并清理旧服务"
-podman-compose down --remove-orphans || true
-echo "::endgroup::"
-
-echo "::group::📦 3. 拉取最新镜像"
+echo "::group::📦 2. 拉取最新镜像"
+# 先拉取再重启: 拉取期间旧容器继续对外服务,
+# 停机窗口只有下一步容器重建的几秒 (原顺序先 down 再 pull, 停机=整个拉取时长)
 podman-compose pull
 echo "::endgroup::"
 
-echo "::group::🚀 4. 启动新服务"
+echo "::group::🚀 3. 重启容器 (镜像有更新时自动重建)"
 # compose 含 build: 段但部署时走预构建镜像，必须 --no-build
 podman-compose up -d --no-build --remove-orphans
 echo "::endgroup::"
 
-echo "::group::🧹 5. 清理悬空镜像 (释放磁盘空间)"
+echo "::group::🧹 4. 清理悬空镜像 (释放磁盘空间)"
 podman image prune -f
 echo "::endgroup::"
 
-echo "::group::📊 6. 验证部署状态"
+echo "::group::📊 5. 验证部署状态"
 sleep 10
 echo ""
 echo "=== Compose 服务状态 ==="
