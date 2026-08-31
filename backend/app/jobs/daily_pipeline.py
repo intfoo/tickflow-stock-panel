@@ -114,8 +114,6 @@ def _can_sync_etf_adj(capset: CapabilitySet) -> bool:
     会永远跳过 ETF 因子同步 (线上实证: 2026-08-30 管道 etf_adj_factor_symbols=0)。
     """
     provider = _prefs.get_adj_factor_provider()
-    if provider == "same_as_daily":
-        provider = _prefs.get_etf_data_provider_resolved()
     return capset.has(Cap.ADJ_FACTOR) or provider != "tickflow"
 
 
@@ -323,8 +321,6 @@ def run_now(
     written_adj = 0
     affected_symbols: list[str] = []
     adj_provider = _prefs.get_adj_factor_provider()
-    if adj_provider == "same_as_daily":
-        adj_provider = _prefs.get_daily_data_provider()
     can_sync_adj = capset.has(Cap.ADJ_FACTOR) or adj_provider != "tickflow"
     if can_sync_adj:
         from datetime import datetime, timedelta

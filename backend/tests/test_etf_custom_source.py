@@ -112,23 +112,19 @@ def test_earliest_etf_daily_date_empty(monkeypatch):
     """空表 / 无视图时 earliest_etf_daily_date 返回 None。"""
     from app.tickflow import repository as repo_mod
 
-    # 构造一个 mock repo 实例: db.execute 返回 (None,) 模拟空表
-    mock_db = MagicMock()
-    mock_db.execute.return_value.fetchone.return_value = (None,)
+    # 上游 v0.2.2 起该方法走 execute_one (cursor+close, 防 Windows 句柄钉住),
+    # mock execute_one 返回 (None,) 模拟空表
+    mock_execute_one = MagicMock(return_value=(None,))
 
-    # KlineRepository.earliest_etf_daily_date 用 self._lock 和 self.db
     # 直接绑到类上测试 (不实例化完整 repo, 避免 DataStore 初始化)
-    lock = __import__("threading").Lock()
-
-    # 用 types.SimpleNamespace 模拟 self
-    fake_self = types.SimpleNamespace(_lock=lock, db=mock_db)
+    fake_self = types.SimpleNamespace(execute_one=mock_execute_one)
 
     result = repo_mod.KlineRepository.earliest_etf_daily_date(fake_self)
 
     assert result is None
 
     # 验证 SQL 查的是 kline_etf_daily
-    executed_sql = mock_db.execute.call_args[0][0]
+    executed_sql = mock_execute_one.call_args[0][0]
     assert "kline_etf_daily" in executed_sql
 
 

@@ -293,12 +293,12 @@ def test_daily_pipeline_etf_adj_gate(monkeypatch):
     仅 tickflow 且无能力 → False (线上 None 档 + amazingdata 自定义源必须放行)。"""
     from app.jobs import daily_pipeline
 
-    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "same_as_daily")
-    monkeypatch.setattr(preferences, "get_etf_data_provider_resolved", lambda: "amazingdata")
+    # get_adj_factor_provider 的 same_as_daily 已在 getter 层解析, 直接返回真实源名
+    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "amazingdata")
     no_cap = types.SimpleNamespace(has=lambda cap: False)
     assert daily_pipeline._can_sync_etf_adj(no_cap) is True
 
-    monkeypatch.setattr(preferences, "get_etf_data_provider_resolved", lambda: "tickflow")
+    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "tickflow")
     assert daily_pipeline._can_sync_etf_adj(no_cap) is False
 
     with_cap = types.SimpleNamespace(has=lambda cap: True)
@@ -341,8 +341,7 @@ def test_extend_history_etf_recomputes_on_new_factors(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(extend_history, "_invalidate", lambda table=None: None)
     monkeypatch.setattr(extend_history, "_refresh_single_view", lambda repo, name: None)
-    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "same_as_daily")
-    monkeypatch.setattr(preferences, "get_etf_data_provider_resolved", lambda: "amazingdata")
+    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "amazingdata")
 
     result = extend_history.run_extend_history(
         repo, capset, value=1, unit="month", asset_type="etf",
