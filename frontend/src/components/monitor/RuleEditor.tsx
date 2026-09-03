@@ -86,6 +86,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const quoteInterval = quoteStatus?.interval_s
   const feishuConfigured = !!(prefs?.feishu_webhook_url)
   const wecomConfigured = !!(prefs?.wecom_webhook_url)
+  const wecomBotReady = !!(prefs?.wecom_bot_enabled && prefs?.wecom_bot_alert_chat?.chatid)
   const [editing] = useState(!!rule)
   // 新建规则: 预填全局「默认推送渠道」(多选数组), preset 显式指定时以 preset 为准。
   // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
@@ -1537,6 +1538,23 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             )}
           </label>
 
+          {/* 企业微信·智能机器人 (长连接主动推送) */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={(draft.webhook_channels ?? []).includes('wecom_bot')}
+              onChange={() => toggleChannel('wecom_bot')}
+              className="h-3 w-3 accent-accent cursor-pointer"
+            />
+            <span className="text-[11px] text-foreground">企业微信</span>
+            <span className="text-[9px] text-muted">智能机器人</span>
+            {(draft.webhook_channels ?? []).includes('wecom_bot') && (
+              <span className={`ml-auto text-[9px] ${wecomBotReady ? 'text-emerald-500' : 'text-warning'}`}>
+                {wecomBotReady ? '已配置' : '未配置'}
+              </span>
+            )}
+          </label>
+
         </div>
 
         {/* 勾选了某渠道但该渠道地址未配置 → 提示前往设置 */}
@@ -1545,6 +1563,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           const unconfigured: string[] = []
           if (selected.includes('feishu') && !feishuConfigured) unconfigured.push('飞书')
           if (selected.includes('wecom') && !wecomConfigured) unconfigured.push('企业微信')
+          if (selected.includes('wecom_bot') && !wecomBotReady) unconfigured.push('智能机器人')
           if (unconfigured.length === 0) return null
           return (
             <p className="text-[10px] leading-relaxed text-warning/80">
@@ -1558,6 +1577,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           const ready: string[] = []
           if (selected.includes('feishu') && feishuConfigured) ready.push('飞书')
           if (selected.includes('wecom') && wecomConfigured) ready.push('企业微信')
+          if (selected.includes('wecom_bot') && wecomBotReady) ready.push('智能机器人')
           if (ready.length === 0) return null
           return (
             <p className="text-[10px] leading-relaxed text-muted">

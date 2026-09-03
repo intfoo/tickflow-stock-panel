@@ -894,7 +894,7 @@ export interface MonitorRule {
   message: string
   webhook_url?: string
   webhook_enabled?: boolean  // 兼容老规则, 已由 webhook_channels 取代
-  webhook_channels?: string[]  // 命中时推送的外部渠道 (合法值 'feishu' | 'wecom')
+  webhook_channels?: string[]  // 命中时推送的外部渠道 (合法值 'feishu' | 'wecom' | 'wecom_bot')
   created_at?: string
   runtime_warning?: string
   // ladder 专属: 封单监控; volume_delta 复用 metric 表示阈值口径 (volume=手数, amount=金额)
@@ -1594,6 +1594,13 @@ export interface WecomBotStatus {
   last_error: string
 }
 
+export interface WecomBotChat {
+  chatid: string
+  chat_type: 1 | 2
+  label: string
+  last_seen: number
+}
+
 export interface Preferences {
   realtime_quotes_enabled: boolean
   watchlist_groups_in_nav: boolean
@@ -1645,6 +1652,8 @@ export interface Preferences {
   wecom_bot_id?: string
   wecom_bot_secret?: string
   wecom_bot_enabled?: boolean
+  wecom_bot_chats?: WecomBotChat[]
+  wecom_bot_alert_chat?: { chatid: string; chat_type: number } | null
   webhook_enabled_default?: boolean
   webhook_default_channels?: string[]
   nav_order: string[]
@@ -1953,7 +1962,7 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ url }),
     }),
-  sendTestWebhook: (channel: 'feishu' | 'wecom') =>
+  sendTestWebhook: (channel: 'feishu' | 'wecom' | 'wecom_bot') =>
     request<{ ok: boolean; detail: string }>('/api/settings/preferences/webhook-test', {
       method: 'POST',
       body: JSON.stringify({ channel }),
@@ -1972,6 +1981,11 @@ export const api = {
     request<{ wecom_bot_enabled: boolean; wecom_bot_status: WecomBotStatus }>('/api/settings/preferences/wecom-bot-toggle', {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
+    }),
+  updateWecomBotAlertChat: (chatid: string, chat_type: number = 0) =>
+    request<{ wecom_bot_alert_chat: { chatid: string; chat_type: number } | null }>('/api/settings/preferences/wecom-bot-alert-chat', {
+      method: 'PUT',
+      body: JSON.stringify({ chatid, chat_type }),
     }),
   updateWebhookDefault: (enabled: boolean) =>
     request<{ webhook_enabled_default: boolean }>('/api/settings/preferences/webhook-enabled-default', {

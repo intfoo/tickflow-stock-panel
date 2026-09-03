@@ -106,6 +106,7 @@ export function PriceAlertDialog({
     const configured = new Set<string>()
     if (prefs.feishu_webhook_url) configured.add('feishu')
     if (prefs.wecom_webhook_url) configured.add('wecom')
+    if (prefs.wecom_bot_enabled && prefs.wecom_bot_alert_chat?.chatid) configured.add('wecom_bot')
     setChannels((prefs.webhook_default_channels ?? []).filter(channel => configured.has(channel)))
   }, [prefs])
 
@@ -330,6 +331,7 @@ export function PriceAlertDialog({
                 {([
                   { key: 'feishu', label: '飞书', configured: !!prefs?.feishu_webhook_url },
                   { key: 'wecom', label: '企业微信', configured: !!prefs?.wecom_webhook_url },
+                  { key: 'wecom_bot', label: '智能机器人', configured: !!(prefs?.wecom_bot_enabled && prefs?.wecom_bot_alert_chat?.chatid) },
                 ]).map(channel => (
                   <label key={channel.key} className={`inline-flex items-center gap-2 text-xs ${channel.configured ? 'text-foreground' : 'text-muted/60'}`}>
                     <input type="checkbox" checked={channels.includes(channel.key)} disabled={!channel.configured} onChange={() => toggleChannel(channel.key)} className="h-3.5 w-3.5 accent-sky-500" />

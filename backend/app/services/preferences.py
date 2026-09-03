@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import threading
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -613,6 +614,9 @@ def set_depth_finalize_time(hour: int, minute: int) -> dict:
 # 复盘推送可选渠道白名单 (企业微信已实现, 与飞书并列)
 # 多选: 不推送 = 空数组, 而非 'none'
 REVIEW_PUSH_CHANNELS = {"feishu", "wecom"}
+# 监控规则推送渠道白名单 (飞书/企业微信群推送 Webhook + wecom_bot 智能机器人长连接)。
+# 注意与 REVIEW_PUSH_CHANNELS 区分: 复盘推送不支持 wecom_bot。
+WEBHOOK_RULE_CHANNELS = {"feishu", "wecom", "wecom_bot"}
 
 
 def get_review_schedule() -> dict:
@@ -863,6 +867,65 @@ def set_wecom_bot_enabled(enabled: bool) -> bool:
     return get_wecom_bot_enabled()
 
 
+# ===== 智能机器人会话注册表 + 告警推送目标 =====
+
+# 注册表上限 (按 last_seen 倒序保留)
+_WECOM_BOT_CHATS_MAX = 20
+# 注册表写盘节流: 已存在会话距上次写盘不超过该秒数则跳过刷新
+_REGISTER_WRITE_THROTTLE_SEC = 300.0
+_register_last_write: float = 0.0
+
+
+def register_wecom_bot_chat(chatid: str, chat_type: int) -> None:
+    """注册/刷新一个机器人会话 (WecomBotService 收到回调帧时调用)。
+
+    新会话立即写盘; 已存在会话受节流保护 (防高频 @ 刷 preferences.json)。
+    """
+    global _register_last_write
+    chatid = (chatid or "").strip()
+    if not chatid or chat_type not in (1, 2):
+        return
+    now = time.time()
+    d = load()
+    chats = d.get("wecom_bot_chats")
+    if not isinstance(chats, list):
+        chats = []
+    for c in chats:
+        if isinstance(c, dict) and c.get("chatid") == chatid:
+            if now - _register_last_write <= _REGISTER_WRITE_THROTTLE_SEC:
+                return
+            c["last_seen"] = now
+            break
+    else:
+        label = f"群聊 ·{chatid[-6:]}" if chat_type == 2 else f"单聊 ·{chatid}"
+        chats.append({"chatid": chatid, "chat_type": chat_type, "label": label, "last_seen": now})
+    chats.sort(key=lambda c: c.get("last_seen", 0), reverse=True)
+    save({"wecom_bot_chats": chats[:_WECOM_BOT_CHATS_MAX]})
+    _register_last_write = now
+
+
+def get_wecom_bot_chats() -> list[dict]:
+    """已发现的机器人会话列表 (供设置页选择推送目标)。"""
+    raw = load().get("wecom_bot_chats")
+    return raw if isinstance(raw, list) else []
+
+
+def get_wecom_bot_alert_chat() -> dict:
+    """告警推送目标会话 {"chatid", "chat_type"}; 未设置返回 {}。"""
+    raw = load().get("wecom_bot_alert_chat")
+    return raw if isinstance(raw, dict) and raw.get("chatid") else {}
+
+
+def set_wecom_bot_alert_chat(chatid: str, chat_type: int = 0) -> dict:
+    """保存告警推送目标会话。空 chatid 表示清除。"""
+    chatid = (chatid or "").strip()
+    if not chatid:
+        save({"wecom_bot_alert_chat": {}})
+        return {}
+    chat = {"chatid": chatid, "chat_type": int(chat_type)}
+    save({"wecom_bot_alert_chat": chat})
+    return chat
+
 
 def get_webhook_enabled_default() -> bool:
     """新建监控规则时是否默认勾选推送 (老布尔, 已由 webhook_default_channels 取代)。
@@ -893,7 +956,7 @@ def get_webhook_default_channels() -> list[str]:
     d = load()
     raw = d.get("webhook_default_channels")
     if isinstance(raw, list):
-        return [c for c in raw if c in REVIEW_PUSH_CHANNELS]
+        return [c for c in raw if c in WEBHOOK_RULE_CHANNELS]
     # 兼容老布尔开关 (勾选即双推)
     if d.get("webhook_enabled_default") is True:
         return ["feishu", "wecom"]
@@ -905,7 +968,7 @@ def set_webhook_default_channels(channels: list[str]) -> list[str]:
     seen: set[str] = set()
     cleaned: list[str] = []
     for c in channels or []:
-        if c in REVIEW_PUSH_CHANNELS and c not in seen:
+        if c in WEBHOOK_RULE_CHANNELS and c not in seen:
             seen.add(c)
             cleaned.append(c)
     save({"webhook_default_channels": cleaned})

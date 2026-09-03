@@ -1414,7 +1414,7 @@ class QuoteService:
     def _maybe_send_webhook(self, rule_events: list[dict], engine) -> None:
         """把告警通过 Webhook 推送到外部 IM (由规则 webhook_channels 指定渠道)。
 
-        - 飞书 / 企业微信任一已配置即生效 (两个都没配才跳过)
+        - 飞书 / 企业微信 / 智能机器人任一已配置即生效 (都没配才跳过)
         - 仅推送 webhook_channels 非空的规则触发的告警, 且只投递被勾选的渠道
         - 失败静默, 不阻断主流程
         - 去重: 复用 MonitorRuleEngine 的 cooldown, 此处不重复去重
@@ -1429,8 +1429,10 @@ class QuoteService:
             feishu_url = preferences.get_feishu_webhook_url()
             feishu_secret = preferences.get_feishu_webhook_secret()
             wecom_url = preferences.get_wecom_webhook_url()
-            # 两个通道都没配置才跳过
-            if not feishu_url and not wecom_url:
+            bot_svc = getattr(getattr(self, "_app_state", None), "wecom_bot_service", None)
+            alert_chat = preferences.get_wecom_bot_alert_chat() if bot_svc else {}
+            # 三个通道都没配置才跳过
+            if not feishu_url and not wecom_url and not (bot_svc and alert_chat):
                 return
 
             # 反查规则, 过滤出启用推送的事件
@@ -1465,6 +1467,17 @@ class QuoteService:
                 if wecom_url and "wecom" in channels:
                     _WEBHOOK_EXECUTOR.submit(webhook_adapter.send_wecom, wecom_url, title, body)
                     enqueued += 1
+                if bot_svc and alert_chat and "wecom_bot" in channels:
+                    md = f"**{title}**\n{body}"
+                    _WEBHOOK_EXECUTOR.submit(
+                        bot_svc.send_markdown,
+                        alert_chat["chatid"], alert_chat["chat_type"], md,
+                    )
+                    enqueued += 1
+                elif "wecom_bot" in channels:
+                    # 勾选了智能机器人渠道但服务不可用/未选推送会话 — 记 INFO 便于排查
+                    logger.info("wecom_bot 渠道已勾选但未就绪 (服务/推送会话未配置), 跳过推送 (rule=%s)",
+                                ev.get("rule_id"))
             if enqueued:
                 logger.info("Webhook 已提交 %d 条 (异步投递, 按渠道独立投递, 失败记 WARNING)", enqueued)
         except Exception as e:  # noqa: BLE001

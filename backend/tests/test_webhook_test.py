@@ -18,6 +18,12 @@ FEISHU_URL = "https://open.feishu.cn/open-apis/bot/v2/hook/test"
 WECOM_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test-key"
 
 
+def _stub_request():
+    """feishu/wecom 分支不访问 request, 传最小桩即可 (wecom_bot 分支才读 app.state)。"""
+    from types import SimpleNamespace
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(wecom_bot_service=None)))
+
+
 def test_feishu_sends_saved_url_and_secret(monkeypatch):
     calls = {}
     monkeypatch.setattr("app.services.preferences.get_feishu_webhook_url", lambda: FEISHU_URL)
@@ -29,7 +35,7 @@ def test_feishu_sends_saved_url_and_secret(monkeypatch):
         ) or True,
     )
 
-    result = run_webhook_test(WebhookTestIn(channel="feishu"))
+    result = run_webhook_test(WebhookTestIn(channel="feishu"), _stub_request())
 
     assert result["ok"] is True
     assert calls["url"] == FEISHU_URL
@@ -45,7 +51,7 @@ def test_feishu_send_failure_returns_ok_false(monkeypatch):
     monkeypatch.setattr("app.services.preferences.get_feishu_webhook_secret", lambda: "")
     monkeypatch.setattr("app.services.webhook_adapter.send_feishu", lambda *a, **k: False)
 
-    result = run_webhook_test(WebhookTestIn(channel="feishu"))
+    result = run_webhook_test(WebhookTestIn(channel="feishu"), _stub_request())
 
     assert result["ok"] is False
     assert "推送失败" in result["detail"]
@@ -58,7 +64,7 @@ def test_feishu_send_failure_returns_ok_false(monkeypatch):
 def test_not_configured_returns_ok_false(monkeypatch, channel, url_getter):
     monkeypatch.setattr(url_getter, lambda: "")
 
-    result = run_webhook_test(WebhookTestIn(channel=channel))
+    result = run_webhook_test(WebhookTestIn(channel=channel), _stub_request())
 
     assert result["ok"] is False
     assert "尚未配置" in result["detail"]
@@ -67,7 +73,7 @@ def test_not_configured_returns_ok_false(monkeypatch, channel, url_getter):
 def test_invalid_saved_feishu_url_returns_ok_false(monkeypatch):
     monkeypatch.setattr("app.services.preferences.get_feishu_webhook_url", lambda: "https://evil.example/hook/xx")
 
-    result = run_webhook_test(WebhookTestIn(channel="feishu"))
+    result = run_webhook_test(WebhookTestIn(channel="feishu"), _stub_request())
 
     assert result["ok"] is False
     assert "地址非法" in result["detail"]
@@ -81,7 +87,7 @@ def test_wecom_sends_saved_url(monkeypatch):
         lambda url, title, body: calls.update(url=url, title=title, body=body) or True,
     )
 
-    result = run_webhook_test(WebhookTestIn(channel="wecom"))
+    result = run_webhook_test(WebhookTestIn(channel="wecom"), _stub_request())
 
     assert result["ok"] is True
     assert calls["url"] == WECOM_URL

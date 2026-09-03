@@ -578,6 +578,7 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
             {([
               { key: 'feishu', label: '飞书' },
               { key: 'wecom', label: '企业微信' },
+              { key: 'wecom_bot', label: '智能机器人' },
             ] as const).map(ch => {
               const on = pushChannels.includes(ch.key)
               return (

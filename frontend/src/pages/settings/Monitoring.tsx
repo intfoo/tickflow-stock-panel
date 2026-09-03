@@ -97,6 +97,10 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [wecomOpen, setWecomOpen] = useState(false)
   // 智能机器人配置区展开态
   const [botOpen, setBotOpen] = useState(false)
+  const botChats = prefs?.wecom_bot_chats ?? []
+  const botAlertChat = prefs?.wecom_bot_alert_chat?.chatid ?? ''
+  const [alertChatDraft, setAlertChatDraft] = useState(botAlertChat)
+  useEffect(() => { setAlertChatDraft(botAlertChat) }, [botAlertChat])
   useEffect(() => {
     setFeishuDraft(feishuWebhookUrl)
     setFeishuSecretDraft(feishuWebhookSecret)
@@ -213,6 +217,17 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
       })
       qc.invalidateQueries({ queryKey: QK.preferences })
     },
+  })
+  const saveBotAlertChat = useMutation({
+    mutationFn: (chatid: string) => api.updateWecomBotAlertChat(chatid),
+    onSuccess: () => {
+      toast('告警推送会话已保存', 'success')
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (err: any) => setBotError(String(err?.message ?? '保存失败')),
+  })
+  const testBot = useMutation({
+    mutationFn: () => api.sendTestWebhook('wecom_bot'),
   })
 
   const runFix = useMutation({
@@ -713,6 +728,65 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                     )}
                   </div>
 
+                  <div className="mt-3 border-t border-border/60 pt-3">
+                    <span className="text-[11px] text-muted">告警推送会话 (监控规则勾选「智能机器人」渠道后推送到此)</span>
+                    {botChats.length === 0 && !botAlertChat ? (
+                      <p className="mt-1.5 text-[10px] text-muted/80 leading-relaxed">
+                        尚未发现会话 — 请先在目标群里 @机器人 发一条消息 (或与机器人单聊), 会话出现后回到此页选择。
+                      </p>
+                    ) : (
+                      <div className="mt-1.5 space-y-1">
+                        {/* 已选会话被裁剪出最近列表时的兜底 radio 项 */}
+                        {botAlertChat && !botChats.some(c => c.chatid === botAlertChat) && (
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="wecom-bot-alert-chat"
+                              checked={alertChatDraft === botAlertChat}
+                              onChange={() => setAlertChatDraft(botAlertChat)}
+                              className="h-3 w-3 accent-accent cursor-pointer"
+                            />
+                            <span className="text-[11px] text-foreground">当前会话 · {botAlertChat.slice(-6)}</span>
+                            <span className="text-[9px] text-warning">已不在最近列表</span>
+                          </label>
+                        )}
+                        {botChats.map(c => (
+                          <label key={c.chatid} className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="wecom-bot-alert-chat"
+                              checked={alertChatDraft === c.chatid}
+                              onChange={() => setAlertChatDraft(c.chatid)}
+                              className="h-3 w-3 accent-accent cursor-pointer"
+                            />
+                            <span className="text-[11px] text-foreground">{c.label}</span>
+                            <span className="text-[9px] text-muted">{new Date(c.last_seen * 1000).toLocaleString()}</span>
+                          </label>
+                        ))}
+                        <div className="mt-2 flex items-center gap-2">
+                          <button
+                            onClick={() => saveBotAlertChat.mutate(alertChatDraft)}
+                            disabled={saveBotAlertChat.isPending || !alertChatDraft || alertChatDraft === botAlertChat}
+                            className="px-3 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-accent/90 transition-colors"
+                          >
+                            {saveBotAlertChat.isPending ? '保存中…' : '保存'}
+                          </button>
+                          {botAlertChat && (
+                            <button
+                              onClick={() => saveBotAlertChat.mutate('')}
+                              disabled={saveBotAlertChat.isPending}
+                              className="px-3 py-1.5 rounded-btn border border-border text-secondary text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-base/60 transition-colors"
+                            >
+                              {saveBotAlertChat.isPending ? '清除中…' : '清除'}
+                            </button>
+                          )}
+                          <TestSendButton test={testBot} configured={!!botAlertChat} unconfiguredHint="请先选择推送会话" />
+                          <TestResult test={testBot} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <details className="mt-3 text-[10px] text-muted">
                     <summary className="cursor-pointer hover:text-secondary">如何获取 BotID 和 Secret?</summary>
                     <ol className="mt-1.5 space-y-1 pl-4 list-decimal leading-relaxed">
@@ -747,15 +821,16 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
 
 // ===== 推送测试按钮 + 内联结果 =====
 
-function TestSendButton({ test, configured }: {
+function TestSendButton({ test, configured, unconfiguredHint }: {
   test: { isPending: boolean; mutate: () => void }
   configured: boolean
+  unconfiguredHint?: string
 }) {
   return (
     <button
       onClick={() => test.mutate()}
       disabled={test.isPending || !configured}
-      title={!configured ? '请先保存 Webhook 地址' : '向已保存的地址发送测试消息'}
+      title={!configured ? (unconfiguredHint ?? '请先保存 Webhook 地址') : '向已保存的地址发送测试消息'}
       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:text-foreground text-xs disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
     >
       {test.isPending ? '测试中…' : '测试'}

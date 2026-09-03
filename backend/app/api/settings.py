@@ -542,6 +542,8 @@ def get_preferences() -> dict:
         "wecom_bot_id": preferences.get_wecom_bot_id(),
         "wecom_bot_secret": preferences.get_wecom_bot_secret(),
         "wecom_bot_enabled": preferences.get_wecom_bot_enabled(),
+        "wecom_bot_chats": preferences.get_wecom_bot_chats(),
+        "wecom_bot_alert_chat": preferences.get_wecom_bot_alert_chat(),
         "webhook_enabled_default": preferences.get_webhook_enabled_default(),
         "webhook_default_channels": preferences.get_webhook_default_channels(),
         "minute_intraday_refresh": preferences.get_minute_intraday_refresh(),
@@ -1239,11 +1241,11 @@ def update_wecom_webhook(req: WecomWebhookPrefsIn) -> dict:
 
 
 class WebhookTestIn(BaseModel):
-    channel: Literal["feishu", "wecom"]
+    channel: Literal["feishu", "wecom", "wecom_bot"]
 
 
 @router.post("/preferences/webhook-test")
-def test_webhook(req: WebhookTestIn) -> dict:
+def test_webhook(req: WebhookTestIn, request: Request) -> dict:
     """向已保存的 Webhook 地址发送一条测试消息，验证配置是否正确。
 
     只测试已保存的配置（与生产推送同源），不测试未保存草稿。
@@ -1265,13 +1267,23 @@ def test_webhook(req: WebhookTestIn) -> dict:
         secret = preferences.get_feishu_webhook_secret()
         # 诊断用途单次尝试: 失败即返回, 不等生产退避重试 (~17s)
         ok = webhook_adapter.send_feishu(url, title, body, secret, max_attempts=1)
-    else:  # wecom
+    elif req.channel == "wecom":
         url = preferences.get_wecom_webhook_url()
         if not url:
             return {"ok": False, "detail": "尚未配置企业微信 Webhook，请先保存"}
         if not webhook_adapter.is_valid_wecom_url(url):
             return {"ok": False, "detail": "已保存的企业微信 Webhook 地址非法，请重新保存"}
         ok = webhook_adapter.send_wecom(url, title, body)
+    else:  # wecom_bot
+        bot_svc = getattr(request.app.state, "wecom_bot_service", None)
+        chat = preferences.get_wecom_bot_alert_chat()
+        if not bot_svc:
+            return {"ok": False, "detail": "智能机器人服务不可用"}
+        if not chat:
+            return {"ok": False, "detail": "尚未选择智能机器人推送会话"}
+        if not bot_svc.status().get("connected"):
+            return {"ok": False, "detail": "智能机器人未连接, 请检查凭证与开关"}
+        ok = bot_svc.send_markdown(chat["chatid"], chat["chat_type"], f"**{title}**\n{body}")
 
     if ok:
         return {"ok": True, "detail": "测试消息已发送，请到群内查收"}
@@ -1312,6 +1324,8 @@ def update_wecom_bot(req: WecomBotPrefsIn, request: Request) -> dict:
         "wecom_bot_id": preferences.get_wecom_bot_id(),
         "wecom_bot_secret": preferences.get_wecom_bot_secret(),
         "wecom_bot_enabled": preferences.get_wecom_bot_enabled(),
+        "wecom_bot_chats": preferences.get_wecom_bot_chats(),
+        "wecom_bot_alert_chat": preferences.get_wecom_bot_alert_chat(),
         "wecom_bot_status": status,
     }
 
@@ -1339,6 +1353,32 @@ def toggle_wecom_bot(req: WecomBotToggleIn, request: Request) -> dict:
         bot_svc.apply_credential_change()
         status = bot_svc.status()
     return {"wecom_bot_enabled": enabled, "wecom_bot_status": status}
+
+
+class WecomBotAlertChatIn(BaseModel):
+    chatid: str = ""
+    chat_type: int = 0
+
+
+@router.put("/preferences/wecom-bot-alert-chat")
+def update_wecom_bot_alert_chat(req: WecomBotAlertChatIn) -> dict:
+    """选择智能机器人告警推送目标会话。
+
+    chatid 必须已在注册表中 (机器人曾收到该会话消息); 空串表示清除。
+    """
+    from app.services import preferences
+
+    chatid = (req.chatid or "").strip()
+    if chatid:
+        known = {c.get("chatid"): c for c in preferences.get_wecom_bot_chats()}
+        if chatid not in known:
+            raise HTTPException(status_code=400, detail="会话不存在, 请先让机器人收到该会话的消息")
+        saved = preferences.set_wecom_bot_alert_chat(
+            chatid, int(known[chatid].get("chat_type") or req.chat_type or 0),
+        )
+    else:
+        saved = preferences.set_wecom_bot_alert_chat("")
+    return {"wecom_bot_alert_chat": saved}
 
 
 class WebhookEnabledDefaultIn(BaseModel):
