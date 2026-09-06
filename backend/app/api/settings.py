@@ -1364,7 +1364,8 @@ class WecomBotAlertChatIn(BaseModel):
 def update_wecom_bot_alert_chat(req: WecomBotAlertChatIn) -> dict:
     """选择智能机器人告警推送目标会话。
 
-    chatid 必须已在注册表中 (机器人曾收到该会话消息); 空串表示清除。
+    chatid 必须已在注册表中 (机器人曾收到该会话消息 — 协议也要求对方先发过
+    消息才能收到主动推送, 故不支持手动填 ID); 空串表示清除。
     """
     from app.services import preferences
 
@@ -1379,6 +1380,21 @@ def update_wecom_bot_alert_chat(req: WecomBotAlertChatIn) -> dict:
     else:
         saved = preferences.set_wecom_bot_alert_chat("")
     return {"wecom_bot_alert_chat": saved}
+
+
+@router.delete("/preferences/wecom-bot-chats/{chatid}")
+def delete_wecom_bot_chat(chatid: str) -> dict:
+    """从智能机器人会话注册表删除一条记录 (清理误识别/测试残留);
+
+    若该会话是当前推送目标则一并清除。返回最新注册表与推送目标。
+    """
+    from app.services import preferences
+
+    preferences.remove_wecom_bot_chat(chatid)
+    return {
+        "wecom_bot_chats": preferences.get_wecom_bot_chats(),
+        "wecom_bot_alert_chat": preferences.get_wecom_bot_alert_chat() or None,
+    }
 
 
 class WebhookEnabledDefaultIn(BaseModel):

@@ -329,14 +329,19 @@ export function PriceAlertDialog({
                   <input type="checkbox" checked disabled className="h-3.5 w-3.5 accent-sky-500" />站内
                 </label>
                 {([
-                  { key: 'feishu', label: '飞书', configured: !!prefs?.feishu_webhook_url },
-                  { key: 'wecom', label: '企业微信', configured: !!prefs?.wecom_webhook_url },
-                  { key: 'wecom_bot', label: '智能机器人', configured: !!(prefs?.wecom_bot_enabled && prefs?.wecom_bot_alert_chat?.chatid) },
+                  { key: 'feishu', label: '飞书', configured: !!prefs?.feishu_webhook_url, hint: '未配置' },
+                  { key: 'wecom', label: '企业微信', configured: !!prefs?.wecom_webhook_url, hint: '未配置' },
+                  {
+                    key: 'wecom_bot',
+                    label: '智能机器人',
+                    configured: !!(prefs?.wecom_bot_enabled && prefs?.wecom_bot_alert_chat?.chatid),
+                    hint: (prefs?.wecom_bot_enabled && prefs?.wecom_bot_id) ? '未选会话' : '未配置',
+                  },
                 ]).map(channel => (
                   <label key={channel.key} className={`inline-flex items-center gap-2 text-xs ${channel.configured ? 'text-foreground' : 'text-muted/60'}`}>
                     <input type="checkbox" checked={channels.includes(channel.key)} disabled={!channel.configured} onChange={() => toggleChannel(channel.key)} className="h-3.5 w-3.5 accent-sky-500" />
                     {channel.label}
-                    {!channel.configured && <span className="text-[9px]">未配置</span>}
+                    {!channel.configured && <span className="text-[9px]">{channel.hint}</span>}
                   </label>
                 ))}
               </div>

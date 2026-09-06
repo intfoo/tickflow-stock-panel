@@ -253,7 +253,7 @@ class WecomBotService:
                 raise
 
     def _dispatch_frame(self, raw) -> None:
-        """分发收到的帧: 响应帧 (无 cmd 且 req_id 命中 pending) resolve future, 其余走回调处理。
+        """分发收到的帧: req_id 命中 pending 的响应帧 resolve future, 其余走回调处理。
 
         pong 响应 (ping 不带 req_id) 不在 pending 中, 自然落入回调分支仅记日志。
         """
@@ -266,7 +266,9 @@ class WecomBotService:
             logger.info("智能机器人收到非 dict JSON 帧: %s", str(raw)[:200])
             return
         req_id = (frame.get("headers") or {}).get("req_id")
-        if "cmd" not in frame and req_id and req_id in self._pending:
+        # req_id 命中 pending 即响应帧 — pending 的 req_id 都是本端生成的 UUID,
+        # 不会与回调帧撞车; 不强制 "无 cmd" (防御服务端响应帧格式变体)
+        if req_id and req_id in self._pending:
             fut = self._pending.pop(req_id)
             if not fut.done():
                 fut.set_result(frame)

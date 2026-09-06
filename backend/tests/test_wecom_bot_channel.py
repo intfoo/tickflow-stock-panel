@@ -57,6 +57,42 @@ def test_webhook_default_channels_allows_wecom_bot(prefs_tmp):
     assert preferences.get_webhook_default_channels() == ["feishu", "wecom_bot"]
 
 
+def test_remove_wecom_bot_chat(prefs_tmp):
+    """删除会话记录; 删除当前推送目标时一并清除目标。"""
+    preferences.register_wecom_bot_chat("chatABC123", 2)
+    preferences.register_wecom_bot_chat("user01", 1)
+    # 删除非目标会话: 目标保留
+    preferences.remove_wecom_bot_chat("user01")
+    assert [c["chatid"] for c in preferences.get_wecom_bot_chats()] == ["chatABC123"]
+    assert preferences.get_wecom_bot_alert_chat()["chatid"] == "chatABC123"
+    # 删除目标会话: 目标一并清除
+    preferences.remove_wecom_bot_chat("chatABC123")
+    assert preferences.get_wecom_bot_chats() == []
+    assert preferences.get_wecom_bot_alert_chat() == {}
+    # 删除不存在的会话: 无操作不报错
+    preferences.remove_wecom_bot_chat("ghost")
+
+
+def test_first_registered_chat_auto_selected(prefs_tmp):
+    """首个新会话自动设为推送目标; 后续新会话不覆盖已选目标。"""
+    preferences.register_wecom_bot_chat("chatABC123", 2)
+    assert preferences.get_wecom_bot_alert_chat() == {"chatid": "chatABC123", "chat_type": 2}
+    preferences.register_wecom_bot_chat("user01", 1)
+    assert preferences.get_wecom_bot_alert_chat()["chatid"] == "chatABC123"
+
+
+def test_auto_select_not_retriggered_for_existing_chat(prefs_tmp, monkeypatch):
+    """手动清除后, 已存在会话再次活跃不会重新自动选中 (尊重用户的清除)。"""
+    preferences.register_wecom_bot_chat("chatABC123", 2)
+    preferences.set_wecom_bot_alert_chat("")
+    monkeypatch.setattr(preferences, "_register_last_write", 0.0)  # 绕过节流, 模拟会话再次活跃
+    preferences.register_wecom_bot_chat("chatABC123", 2)
+    assert preferences.get_wecom_bot_alert_chat() == {}
+    # 但出现全新会话时仍会自动选中
+    preferences.register_wecom_bot_chat("user02", 1)
+    assert preferences.get_wecom_bot_alert_chat() == {"chatid": "user02", "chat_type": 1}
+
+
 # ===== Task 2: WecomBotService 帧分发 / 会话注册 / 发送 =====
 
 def _svc():

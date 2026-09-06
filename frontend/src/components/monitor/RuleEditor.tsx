@@ -86,7 +86,9 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const quoteInterval = quoteStatus?.interval_s
   const feishuConfigured = !!(prefs?.feishu_webhook_url)
   const wecomConfigured = !!(prefs?.wecom_webhook_url)
-  const wecomBotReady = !!(prefs?.wecom_bot_enabled && prefs?.wecom_bot_alert_chat?.chatid)
+  // 凭证已配且长连接已启用 ≠ 可推送: 还需选定推送会话 (需用户先 @机器人 让会话被发现)
+  const wecomBotConfigured = !!(prefs?.wecom_bot_enabled && prefs?.wecom_bot_id)
+  const wecomBotReady = wecomBotConfigured && !!(prefs?.wecom_bot_alert_chat?.chatid)
   const [editing] = useState(!!rule)
   // 新建规则: 预填全局「默认推送渠道」(多选数组), preset 显式指定时以 preset 为准。
   // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
@@ -1551,7 +1553,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             <span className="text-[9px] text-muted">智能机器人</span>
             {(draft.webhook_channels ?? []).includes('wecom_bot') && (
               <span className={`ml-auto text-[9px] ${wecomBotReady ? 'text-emerald-500' : 'text-warning'}`}>
-                {wecomBotReady ? '已配置' : '未配置'}
+                {wecomBotReady ? '已配置' : (wecomBotConfigured ? '未选会话' : '未配置')}
               </span>
             )}
           </label>
@@ -1564,11 +1566,13 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           const unconfigured: string[] = []
           if (selected.includes('feishu') && !feishuConfigured) unconfigured.push('飞书')
           if (selected.includes('wecom') && !wecomConfigured) unconfigured.push('企业微信')
-          if (selected.includes('wecom_bot') && !wecomBotReady) unconfigured.push('智能机器人')
+          if (selected.includes('wecom_bot') && !wecomBotReady) {
+            unconfigured.push(wecomBotConfigured ? '智能机器人(已配置,未选推送会话)' : '智能机器人')
+          }
           if (unconfigured.length === 0) return null
           return (
             <p className="text-[10px] leading-relaxed text-warning/80">
-              {unconfigured.join('、')}尚未配置,
+              {unconfigured.join('、')}尚未就绪,
               <Link to="/settings?tab=monitoring&highlight=webhooks" className="text-accent hover:text-accent/80">前往设置页配置 →</Link>
             </p>
           )

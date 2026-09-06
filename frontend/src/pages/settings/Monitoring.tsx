@@ -7,6 +7,7 @@ import {
   Zap,
   Webhook,
   ChevronDown,
+  Trash2,
 } from 'lucide-react'
 import {
   usePreferences,
@@ -99,8 +100,6 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [botOpen, setBotOpen] = useState(false)
   const botChats = prefs?.wecom_bot_chats ?? []
   const botAlertChat = prefs?.wecom_bot_alert_chat?.chatid ?? ''
-  const [alertChatDraft, setAlertChatDraft] = useState(botAlertChat)
-  useEffect(() => { setAlertChatDraft(botAlertChat) }, [botAlertChat])
   useEffect(() => {
     setFeishuDraft(feishuWebhookUrl)
     setFeishuSecretDraft(feishuWebhookSecret)
@@ -226,6 +225,19 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     },
     onError: (err: any) => setBotError(String(err?.message ?? '保存失败')),
   })
+  // 删除一条会话记录 (清理误识别/测试残留; 若为推送目标后端一并清除)
+  const deleteBotChat = useMutation({
+    mutationFn: (chatid: string) => api.deleteWecomBotChat(chatid),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
+    onError: (err: any) => setBotError(String(err?.message ?? '删除失败')),
+  })
+  // 轮询偏好: 用户 @机器人 后会话注册并自动选中, 页面无需手动刷新即自动填充
+  // (协议要求对方先给机器人发过消息才能收到推送, 故只支持自动识别, 不支持手动填 ID)
+  useEffect(() => {
+    if (!wecomBotEnabled) return
+    const t = setInterval(() => qc.invalidateQueries({ queryKey: QK.preferences }), 5000)
+    return () => clearInterval(t)
+  }, [wecomBotEnabled, qc])
   const testBot = useMutation({
     mutationFn: () => api.sendTestWebhook('wecom_bot'),
   })
@@ -729,62 +741,62 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                   </div>
 
                   <div className="mt-3 border-t border-border/60 pt-3">
-                    <span className="text-[11px] text-muted">告警推送会话 (监控规则勾选「智能机器人」渠道后推送到此)</span>
-                    {botChats.length === 0 && !botAlertChat ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-muted">告警推送会话 (监控规则勾选「智能机器人」渠道后推送到此)</span>
+                      {botAlertChat && (
+                        <button
+                          onClick={() => saveBotAlertChat.mutate('')}
+                          disabled={saveBotAlertChat.isPending}
+                          className="px-2 py-0.5 rounded-btn border border-border text-secondary text-[10px] font-medium disabled:opacity-50 cursor-pointer hover:bg-base/60 transition-colors"
+                        >
+                          {saveBotAlertChat.isPending ? '清除中…' : '清除推送目标'}
+                        </button>
+                      )}
+                    </div>
+                    {botChats.length === 0 ? (
                       <p className="mt-1.5 text-[10px] text-muted/80 leading-relaxed">
-                        尚未发现会话 — 请先在目标群里 @机器人 发一条消息 (或与机器人单聊), 会话出现后回到此页选择。
+                        尚未识别到会话 — 在目标群里 @机器人 发一句话, 或与机器人单聊发一条消息,
+                        会话会自动出现在这里 (页面每 5 秒自动刷新)。
                       </p>
                     ) : (
                       <div className="mt-1.5 space-y-1">
-                        {/* 已选会话被裁剪出最近列表时的兜底 radio 项 */}
-                        {botAlertChat && !botChats.some(c => c.chatid === botAlertChat) && (
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="radio"
-                              name="wecom-bot-alert-chat"
-                              checked={alertChatDraft === botAlertChat}
-                              onChange={() => setAlertChatDraft(botAlertChat)}
-                              className="h-3 w-3 accent-accent cursor-pointer"
-                            />
-                            <span className="text-[11px] text-foreground">当前会话 · {botAlertChat.slice(-6)}</span>
-                            <span className="text-[9px] text-warning">已不在最近列表</span>
-                          </label>
-                        )}
+                        {/* 点选即保存为推送目标; 垃圾桶删除该条记录 (清理误识别/测试残留) */}
                         {botChats.map(c => (
-                          <label key={c.chatid} className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="radio"
-                              name="wecom-bot-alert-chat"
-                              checked={alertChatDraft === c.chatid}
-                              onChange={() => setAlertChatDraft(c.chatid)}
-                              className="h-3 w-3 accent-accent cursor-pointer"
-                            />
-                            <span className="text-[11px] text-foreground">{c.label}</span>
-                            <span className="text-[9px] text-muted">{new Date(c.last_seen * 1000).toLocaleString()}</span>
-                          </label>
-                        ))}
-                        <div className="mt-2 flex items-center gap-2">
-                          <button
-                            onClick={() => saveBotAlertChat.mutate(alertChatDraft)}
-                            disabled={saveBotAlertChat.isPending || !alertChatDraft || alertChatDraft === botAlertChat}
-                            className="px-3 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-accent/90 transition-colors"
-                          >
-                            {saveBotAlertChat.isPending ? '保存中…' : '保存'}
-                          </button>
-                          {botAlertChat && (
+                          <div key={c.chatid} className="flex items-center gap-2">
+                            <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                              <input
+                                type="radio"
+                                name="wecom-bot-alert-chat"
+                                checked={botAlertChat === c.chatid}
+                                onChange={() => saveBotAlertChat.mutate(c.chatid)}
+                                disabled={saveBotAlertChat.isPending}
+                                className="h-3 w-3 accent-accent cursor-pointer"
+                              />
+                              <span className="text-[11px] text-foreground">{c.label}</span>
+                              <span className="text-[9px] text-muted">{new Date(c.last_seen * 1000).toLocaleString()}</span>
+                            </label>
                             <button
-                              onClick={() => saveBotAlertChat.mutate('')}
-                              disabled={saveBotAlertChat.isPending}
-                              className="px-3 py-1.5 rounded-btn border border-border text-secondary text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-base/60 transition-colors"
+                              onClick={() => deleteBotChat.mutate(c.chatid)}
+                              disabled={deleteBotChat.isPending}
+                              title="删除该会话记录"
+                              className="p-1 text-muted/50 hover:text-danger disabled:opacity-50 cursor-pointer transition-colors"
                             >
-                              {saveBotAlertChat.isPending ? '清除中…' : '清除'}
+                              <Trash2 className="h-3 w-3" />
                             </button>
-                          )}
-                          <TestSendButton test={testBot} configured={!!botAlertChat} unconfiguredHint="请先选择推送会话" />
-                          <TestResult test={testBot} />
-                        </div>
+                          </div>
+                        ))}
                       </div>
                     )}
+                    <p className="mt-1 text-[9px] text-muted/70 leading-relaxed">
+                      识别方式: 在目标群里 @机器人 发一句话, 或与机器人单聊发一条消息
+                      (企业微信规定对方先发过消息, 机器人才能主动推送)。
+                    </p>
+
+                    {/* 测试推送常驻 (与飞书/企业微信渠道一致): 未选会话时禁用 */}
+                    <div className="mt-2 flex items-center gap-2">
+                      <TestSendButton test={testBot} configured={!!botAlertChat} unconfiguredHint="请先让机器人识别到会话" />
+                      <TestResult test={testBot} />
+                    </div>
                   </div>
 
                   <details className="mt-3 text-[10px] text-muted">

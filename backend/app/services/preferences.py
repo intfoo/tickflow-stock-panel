@@ -56,7 +56,8 @@ def load() -> dict:
     return copy.deepcopy(_cache)
 
 
-_SAVE_LOCK = threading.Lock()
+# RLock: register_wecom_bot_chat 需要在锁内做完整 read-modify-write 后再调 save()
+_SAVE_LOCK = threading.RLock()
 
 
 def save(updates: dict) -> dict:
@@ -880,34 +881,65 @@ def register_wecom_bot_chat(chatid: str, chat_type: int) -> None:
     """注册/刷新一个机器人会话 (WecomBotService 收到回调帧时调用)。
 
     新会话立即写盘; 已存在会话受节流保护 (防高频 @ 刷 preferences.json)。
+    整个 read-modify-write 在 _SAVE_LOCK 内完成: 长连接线程与用户 API 操作
+    (选择/清除推送目标) 并发时, 不会用旧快照覆盖用户刚保存的值 (TOCTOU)。
     """
     global _register_last_write
     chatid = (chatid or "").strip()
     if not chatid or chat_type not in (1, 2):
         return
-    now = time.time()
-    d = load()
-    chats = d.get("wecom_bot_chats")
-    if not isinstance(chats, list):
-        chats = []
-    for c in chats:
-        if isinstance(c, dict) and c.get("chatid") == chatid:
-            if now - _register_last_write <= _REGISTER_WRITE_THROTTLE_SEC:
-                return
-            c["last_seen"] = now
-            break
-    else:
-        label = f"群聊 ·{chatid[-6:]}" if chat_type == 2 else f"单聊 ·{chatid}"
-        chats.append({"chatid": chatid, "chat_type": chat_type, "label": label, "last_seen": now})
-    chats.sort(key=lambda c: c.get("last_seen", 0), reverse=True)
-    save({"wecom_bot_chats": chats[:_WECOM_BOT_CHATS_MAX]})
-    _register_last_write = now
+    with _SAVE_LOCK:
+        now = time.time()
+        d = load()
+        chats = d.get("wecom_bot_chats")
+        if not isinstance(chats, list):
+            chats = []
+        inserted = False
+        for c in chats:
+            if isinstance(c, dict) and c.get("chatid") == chatid:
+                if now - _register_last_write <= _REGISTER_WRITE_THROTTLE_SEC:
+                    return
+                c["last_seen"] = now
+                break
+        else:
+            label = f"群聊 ·{chatid[-6:]}" if chat_type == 2 else f"单聊 ·{chatid}"
+            chats.append({"chatid": chatid, "chat_type": chat_type, "label": label, "last_seen": now})
+            inserted = True
+        chats.sort(key=lambda c: c.get("last_seen", 0), reverse=True)
+        updates: dict = {"wecom_bot_chats": chats[:_WECOM_BOT_CHATS_MAX]}
+        # 新会话出现且尚未设置推送目标时自动选中 (仅插入新会话时;
+        # 用户手动清除后, 已存在会话的消息不会重新自动选中)
+        alert = d.get("wecom_bot_alert_chat")
+        if inserted and not (isinstance(alert, dict) and alert.get("chatid")):
+            updates["wecom_bot_alert_chat"] = {"chatid": chatid, "chat_type": chat_type}
+        save(updates)  # RLock 可重入, 与外部持有同一把锁
+        _register_last_write = now
 
 
 def get_wecom_bot_chats() -> list[dict]:
     """已发现的机器人会话列表 (供设置页选择推送目标)。"""
     raw = load().get("wecom_bot_chats")
     return raw if isinstance(raw, list) else []
+
+
+def remove_wecom_bot_chat(chatid: str) -> None:
+    """从注册表删除一个会话 (清理误识别/测试残留); 若它是当前推送目标则一并清除。"""
+    chatid = (chatid or "").strip()
+    if not chatid:
+        return
+    with _SAVE_LOCK:
+        d = load()
+        chats = d.get("wecom_bot_chats")
+        if not isinstance(chats, list):
+            return
+        remaining = [c for c in chats if not (isinstance(c, dict) and c.get("chatid") == chatid)]
+        if len(remaining) == len(chats):
+            return
+        updates: dict = {"wecom_bot_chats": remaining}
+        alert = d.get("wecom_bot_alert_chat")
+        if isinstance(alert, dict) and alert.get("chatid") == chatid:
+            updates["wecom_bot_alert_chat"] = {}
+        save(updates)  # RLock 可重入
 
 
 def get_wecom_bot_alert_chat() -> dict:

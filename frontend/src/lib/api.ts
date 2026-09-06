@@ -2005,6 +2005,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ chatid, chat_type }),
     }),
+  deleteWecomBotChat: (chatid: string) =>
+    request<{ wecom_bot_chats: WecomBotChat[]; wecom_bot_alert_chat: { chatid: string; chat_type: number } | null }>(
+      `/api/settings/preferences/wecom-bot-chats/${encodeURIComponent(chatid)}`,
+      { method: 'DELETE' },
+    ),
   updateWebhookDefault: (enabled: boolean) =>
     request<{ webhook_enabled_default: boolean }>('/api/settings/preferences/webhook-enabled-default', {
       method: 'PUT',

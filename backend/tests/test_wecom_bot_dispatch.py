@@ -104,9 +104,20 @@ def prefs_client(monkeypatch, tmp_path):
 
 
 def test_alert_chat_endpoint_rejects_unknown(prefs_client):
+    """未发现的会话一律 400 — 协议要求对方先发过消息才能收推送, 不支持手动填 ID。"""
     r = prefs_client.put("/api/settings/preferences/wecom-bot-alert-chat",
                          json={"chatid": "nope", "chat_type": 2})
     assert r.status_code == 400
+
+
+def test_delete_chat_endpoint_removes_and_clears_target(prefs_client):
+    """DELETE 会话记录: 从注册表移除; 若为推送目标一并清除。"""
+    from app.services import preferences as prefs
+    prefs.register_wecom_bot_chat("chatABC123", 2)  # 自动选为目标
+    r = prefs_client.delete("/api/settings/preferences/wecom-bot-chats/chatABC123")
+    assert r.status_code == 200
+    assert r.json()["wecom_bot_chats"] == []
+    assert r.json()["wecom_bot_alert_chat"] is None
 
 
 def test_alert_chat_endpoint_roundtrip_and_clear(prefs_client):
