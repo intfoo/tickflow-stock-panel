@@ -89,6 +89,13 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   // 凭证已配且长连接已启用 ≠ 可推送: 还需选定推送会话 (需用户先 @机器人 让会话被发现)
   const wecomBotConfigured = !!(prefs?.wecom_bot_enabled && prefs?.wecom_bot_id)
   const wecomBotReady = wecomBotConfigured && !!(prefs?.wecom_bot_alert_chat?.chatid)
+  const customConfigured = !!(prefs?.custom_webhook_url)
+  const emailConfigured = !!(
+    prefs?.email_smtp_config?.host
+    && prefs.email_smtp_config.from_address
+    && prefs.email_smtp_config.to_addresses.length
+    && (!prefs.email_smtp_config.username || prefs.email_smtp_password_set)
+  )
   const [editing] = useState(!!rule)
   // 新建规则: 预填全局「默认推送渠道」(多选数组), preset 显式指定时以 preset 为准。
   // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
@@ -372,7 +379,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     })
   }
 
-  // 勾选/取消勾选某个推送渠道 (飞书 / 企业微信 各自独立)
+  // 勾选/取消勾选某个外部推送渠道。
   const toggleChannel = (ch: string) =>
     setDraft(d => {
       const cur = d.webhook_channels ?? []
@@ -1498,10 +1505,10 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         </label>
       </div>
 
-      {/* Webhook 推送 — 飞书 / 企业微信 */}
+      {/* 外部推送 */}
       <div className="rounded-btn border border-border/40 bg-base/40 p-3 space-y-2">
         <div className="flex items-center gap-1.5">
-          <span className="text-[11px] font-medium text-foreground">Webhook 推送</span>
+          <span className="text-[11px] font-medium text-foreground">外部推送</span>
           <span className="text-[9px] text-muted">触发时推送告警到外部</span>
         </div>
 
@@ -1520,6 +1527,38 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             {(draft.webhook_channels ?? []).includes('feishu') && (
               <span className={`ml-auto text-[9px] ${feishuConfigured ? 'text-emerald-500' : 'text-warning'}`}>
                 {feishuConfigured ? '已配置' : '未配置'}
+              </span>
+            )}
+          </label>
+
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={(draft.webhook_channels ?? []).includes('custom')}
+              onChange={() => toggleChannel('custom')}
+              className="h-3 w-3 accent-accent cursor-pointer"
+            />
+            <span className="text-[11px] text-foreground">第三方系统</span>
+            <span className="text-[9px] text-muted">JSON Webhook</span>
+            {(draft.webhook_channels ?? []).includes('custom') && (
+              <span className={`ml-auto text-[9px] ${customConfigured ? 'text-emerald-500' : 'text-warning'}`}>
+                {customConfigured ? '已配置' : '未配置'}
+              </span>
+            )}
+          </label>
+
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={(draft.webhook_channels ?? []).includes('email')}
+              onChange={() => toggleChannel('email')}
+              className="h-3 w-3 accent-accent cursor-pointer"
+            />
+            <span className="text-[11px] text-foreground">邮件</span>
+            <span className="text-[9px] text-muted">SMTP</span>
+            {(draft.webhook_channels ?? []).includes('email') && (
+              <span className={`ml-auto text-[9px] ${emailConfigured ? 'text-emerald-500' : 'text-warning'}`}>
+                {emailConfigured ? '已配置' : '未配置'}
               </span>
             )}
           </label>
@@ -1569,6 +1608,8 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           if (selected.includes('wecom_bot') && !wecomBotReady) {
             unconfigured.push(wecomBotConfigured ? '智能机器人(已配置,未选推送会话)' : '智能机器人')
           }
+          if (selected.includes('custom') && !customConfigured) unconfigured.push('第三方系统')
+          if (selected.includes('email') && !emailConfigured) unconfigured.push('邮件')
           if (unconfigured.length === 0) return null
           return (
             <p className="text-[10px] leading-relaxed text-warning/80">
@@ -1583,6 +1624,8 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           if (selected.includes('feishu') && feishuConfigured) ready.push('飞书')
           if (selected.includes('wecom') && wecomConfigured) ready.push('企业微信')
           if (selected.includes('wecom_bot') && wecomBotReady) ready.push('智能机器人')
+          if (selected.includes('custom') && customConfigured) ready.push('第三方系统')
+          if (selected.includes('email') && emailConfigured) ready.push('邮件')
           if (ready.length === 0) return null
           return (
             <p className="text-[10px] leading-relaxed text-muted">

@@ -388,9 +388,20 @@ def _compute_batch(repo, enriched_dir, instruments, historical_shares,
     return df.filter((pl.col("date") >= batch_start) & (pl.col("date") <= batch_end))
 
 
-def _scan_enriched_fallback(repo, start: date, end: date, *,
-                            index_pct_map: dict | None = None,
-                            st_symbols: frozenset[str] | set[str] | None = None) -> pl.DataFrame | None:
+def _filter_excluded_symbols(df: pl.DataFrame, excluded_symbols: list[str]) -> pl.DataFrame:
+    if excluded_symbols and "symbol" in df.columns:
+        return df.filter(~pl.col("symbol").str.to_uppercase().is_in(excluded_symbols))
+    return df
+
+
+def _scan_enriched_fallback(
+    repo,
+    start: date,
+    end: date,
+    *,
+    index_pct_map: dict | None = None,
+    excluded_symbols: list[str] | None = None,
+) -> pl.DataFrame | None:
     """缓存不覆盖时的慢路径: scan enriched parquet → 重算指标 → 逐批聚合到日级。
 
     仅在 regime 首次全量回填或缓存未预热时触发。返回 regime 日级行(已聚合)。
@@ -420,6 +431,7 @@ def _scan_enriched_fallback(repo, start: date, end: date, *,
         enriched_dir = repo.store.data_dir / "kline_daily_enriched"
         if not enriched_dir.exists():
             return None
+        excluded_symbols = excluded_symbols or []
         instruments = repo.get_instruments()
         historical_shares = repo.get_historical_shares()
 
@@ -437,39 +449,38 @@ def _scan_enriched_fallback(repo, start: date, end: date, *,
         target_dates = [d for d, _ in part_files if start <= d <= end]
         if not target_dates:
             return None
-        st_list = sorted(st_symbols) if st_symbols else []
-
-        def _run_batch(bs: date, be: date) -> pl.DataFrame:
-            df = _compute_batch(repo, enriched_dir, instruments, historical_shares,
-                                bs, be, warmup_days, part_files=part_files)
-            if df.is_empty():
-                return pl.DataFrame()
-            if st_list and "symbol" in df.columns:
-                df = df.filter(
-                    ~pl.col("symbol").str.to_uppercase().is_in(st_list)
-                )
-            return _aggregate_daily(df, index_pct_map)
 
         # 小范围: 单次算(无分批开销)
         if len(target_dates) <= batch_days:
-            daily = _run_batch(target_dates[0], target_dates[-1])
-            return daily if not daily.is_empty() else None
+            df = _compute_batch(repo, enriched_dir, instruments, historical_shares,
+                                target_dates[0], target_dates[-1], warmup_days,
+                                part_files=part_files)
+            if df.is_empty():
+                return None
+            df = _filter_excluded_symbols(df, excluded_symbols)
+            result = _aggregate_daily(df, index_pct_map)
+            return result if not result.is_empty() else None
 
-        # 大范围: 按交易日分批, 逐批算 + 逐批聚合, 只累积日级小帧
+        # 大范围: 每批个股明细立即压缩为日级行, 只保留小型聚合结果。
         batches = [
             (target_dates[i], target_dates[min(i + batch_days - 1, len(target_dates) - 1)])
             for i in range(0, len(target_dates), batch_days)
         ]
-        logger.info("regime fallback: %d 天分 %d 批 (每批≤%d天 + %d天warmup)",
+        logger.info("regime fallback: %d 天分 %d 批逐批聚合 (每批≤%d天 + %d天warmup)",
                     len(target_dates), len(batches), batch_days, warmup_days)
-        parts: list[pl.DataFrame] = []
+        daily_parts: list[pl.DataFrame] = []
         for bs, be in batches:
-            daily = _run_batch(bs, be)
+            df = _compute_batch(repo, enriched_dir, instruments, historical_shares, bs, be,
+                                warmup_days, part_files=part_files)
+            if df.is_empty():
+                continue
+            df = _filter_excluded_symbols(df, excluded_symbols)
+            daily = _aggregate_daily(df, index_pct_map)
             if not daily.is_empty():
-                parts.append(daily)
-        if not parts:
+                daily_parts.append(daily)
+        if not daily_parts:
             return None
-        return pl.concat(parts, how="vertical_relaxed")
+        return pl.concat(daily_parts, how="vertical_relaxed")
     except Exception as e:  # noqa: BLE001
         logger.warning("regime scan_enriched_fallback failed: %s", e)
         return None
@@ -508,31 +519,35 @@ def run_regime_batch(repo, start: date, end: date) -> pl.DataFrame:
         exclude_st = _prefs_st.get_sentiment_exclude_st()
     except Exception:
         exclude_st = True
-    st_symbols: frozenset[str] = frozenset()
+    excluded_symbols: list[str] = []
     if exclude_st:
         from app.services.market_mainline import load_risk_warning_symbols
 
-        st_symbols = load_risk_warning_symbols(repo.store.data_dir)
+        st_syms = load_risk_warning_symbols(repo.store.data_dir)
+        excluded_symbols = sorted(st_syms)
 
-    # enriched 多日数据(优先缓存)
+    # enriched 多日数据(优先缓存)。慢路径在每批内部完成过滤和日级聚合,
+    # 避免把所有批次的个股明细同时保留到最终 group_by。
     df = repo.get_enriched_range(start, end)
-    if df is not None and not df.is_empty():
-        if st_symbols and "symbol" in df.columns:
-            df = df.filter(
-                ~pl.col("symbol").str.to_uppercase().is_in(sorted(st_symbols))
-            )
-        return _aggregate_daily(df, index_pct_map)
+    if df is None or df.is_empty():
+        logger.info("regime batch: enriched cache miss [%s~%s], fallback to scan", start, end)
+        result = _scan_enriched_fallback(
+            repo,
+            start,
+            end,
+            index_pct_map=index_pct_map,
+            excluded_symbols=excluded_symbols,
+        )
+        if result is None or result.is_empty():
+            logger.info("regime batch: no enriched data for [%s~%s]", start, end)
+            return pl.DataFrame()
+        return result
 
-    logger.info("regime batch: enriched cache miss [%s~%s], fallback to scan", start, end)
-    daily = _scan_enriched_fallback(
-        repo, start, end,
-        index_pct_map=index_pct_map,
-        st_symbols=st_symbols,
-    )
-    if daily is None or daily.is_empty():
-        logger.info("regime batch: no enriched data for [%s~%s]", start, end)
+    df = _filter_excluded_symbols(df, excluded_symbols)
+    if df.is_empty():
         return pl.DataFrame()
-    return daily
+
+    return _aggregate_daily(df, index_pct_map)
 
 
 # ───────────────────────── 持久化(upsert) ─────────────────────────
