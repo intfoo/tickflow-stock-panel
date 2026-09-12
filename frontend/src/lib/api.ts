@@ -2582,7 +2582,8 @@ export const api = {
     if (start) params.set('start', start)
     if (end) params.set('end', end)
     const qs = params.toString()
-    return request<{ ok: boolean; computed: number; phase_days?: number; mainline_rows?: number }>(`/api/regime/recompute${qs ? `?${qs}` : ''}`, { method: 'POST' })
+    // 补算需扫 enriched 全市场数据, 大区间耗时超过默认超时, 放宽到 5 分钟
+    return request<{ ok: boolean; computed: number; phase_days?: number; mainline_rows?: number }>(`/api/regime/recompute${qs ? `?${qs}` : ''}`, { method: 'POST', timeoutMs: 300_000 })
   },
   regimePhases: (start?: string, end?: string) => {
     const params = new URLSearchParams()
@@ -2993,10 +2994,24 @@ export const api = {
     schedule_minutes?: number; enabled?: boolean;
     time_window_start?: string | null; time_window_end?: string | null;
     date_param?: string | null;
+    auth?: ExtPullAuth;
   }) =>
     request<{ status: string; pull: PullConfig }>(
       `/api/ext-data/${id}/pull`,
       { method: 'PUT', body: JSON.stringify(body) },
+    ),
+
+  /** 查询拉取接口 API Key 状态 (脱敏, 不返回明文) */
+  extDataApiKey: (id: string) =>
+    request<{ key_set: boolean; masked_key: string }>(
+      `/api/ext-data/${encodeURIComponent(id)}/api-key`,
+    ),
+
+  /** 设置 (或空串清除) 拉取接口的 API Key */
+  extDataApiKeySet: (id: string, key: string) =>
+    request<{ status: string; key_set: boolean; masked_key: string }>(
+      `/api/ext-data/${encodeURIComponent(id)}/api-key`,
+      { method: 'PUT', body: JSON.stringify({ key }) },
     ),
 
   extDataPullTest: (id: string) =>
@@ -3710,6 +3725,13 @@ export interface ExtDataField {
   label: string
 }
 
+/** 拉取接口鉴权方式; Key 本体存 secrets_store, 不出现在配置里 */
+export interface ExtPullAuth {
+  type: 'none' | 'bearer' | 'header' | 'query'
+  header?: string
+  param?: string
+}
+
 export interface PullConfig {
   url: string
   method: string
@@ -3728,6 +3750,7 @@ export interface PullConfig {
   time_window_end?: string | null
   /** 接口按日查询的参数名 (如 "date"): 配置后支持历史回补 */
   date_param?: string | null
+  auth?: ExtPullAuth | null
 }
 
 export interface ExtDataBackfillResult {
