@@ -13,6 +13,8 @@ import threading
 import time
 from pathlib import Path
 
+from app.services.fs_utils import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 # 进程内缓存: 行情轮询线程一轮会调用 8~12 次 getter, 每次读盘+parse 是纯重复;
@@ -69,8 +71,8 @@ def save(updates: dict) -> dict:
     with _SAVE_LOCK:
         current = load()
         current.update(updates)
-        _path().write_text(
-            json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8",
+        atomic_write_text(
+            _path(), json.dumps(current, indent=2, ensure_ascii=False),
         )
         _invalidate_cache()
     return current

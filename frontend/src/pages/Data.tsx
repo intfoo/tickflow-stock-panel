@@ -697,7 +697,7 @@ export function Data() {
         }
       />
 
-      <div className="px-8 py-6 space-y-6 max-w-6xl">
+      <div className="mx-auto px-8 py-6 space-y-6 max-w-6xl">
         {/* 实时进度 */}
         <AnimatePresence>
           {job.data && (
