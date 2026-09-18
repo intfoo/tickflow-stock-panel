@@ -55,6 +55,10 @@ podman-compose pull
 echo "::endgroup::"
 
 echo "::group::🚀 3. 重启容器 (镜像有更新时自动重建)"
+# 先拉取再重启: 拉取期间旧容器继续对外服务, 停机窗口只有 down+重建的几秒。
+# up 前必须 down: rootless podman-compose 不会自动替换同名运行中容器
+# (报 "container name is already in use ... use --replace"), down 后 up 即重建。
+podman-compose down --remove-orphans || true
 # compose 含 build: 段但部署时走预构建镜像，必须 --no-build
 podman-compose up -d --no-build --remove-orphans
 echo "::endgroup::"
