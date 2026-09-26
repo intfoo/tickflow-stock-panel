@@ -20,7 +20,7 @@ import polars as pl
 from app.data_providers.base import AssetType
 from app.indicators.pipeline import filter_halt_days
 from app.market_time import CN_TZ, cn_now, cn_today
-from app.services import preferences
+from app.services import minute_adjust, preferences
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.client import get_client
 from app.tickflow.rate_limits import chunked, resolve_limit, sleep_between_batches
@@ -580,21 +580,30 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
             )
             new_data = _filter_factor_response(new_data, symbols, f"custom:{provider_name}")
             if new_data.is_empty():
-                return 0, []
-            affected = new_data["symbol"].unique().to_list()
-            factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
-            out = repo.store.data_dir / factor_dir / "all.parquet"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            if out.exists():
-                existing = _prune_foreign_factor_rows(pl.read_parquet(out), symbols, asset_type)
-                before = existing.height
-                merged = pl.concat([existing, new_data]).unique(
-                    subset=["symbol", "trade_date"], keep="last",
-                ).sort(["symbol", "trade_date"])
-                _atomic_write_parquet(merged, out)
-                return merged.height - before, affected
-            _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
-            return new_data.height, affected
+                # 扶摇等自定义源对 ETF 直接空返回, 与「该 ETF 无除权」无法区分;
+                # 有 TickFlow 除权能力时回退, 否则 ETF 日K永远不复权。
+                if asset_type == "etf":
+                    logger.info(
+                        "custom adj_factor provider %s returned no ETF rows, falling back to TickFlow",
+                        provider_name,
+                    )
+                else:
+                    return 0, []
+            else:
+                affected = new_data["symbol"].unique().to_list()
+                factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
+                out = repo.store.data_dir / factor_dir / "all.parquet"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                if out.exists():
+                    existing = _prune_foreign_factor_rows(pl.read_parquet(out), symbols, asset_type)
+                    before = existing.height
+                    merged = pl.concat([existing, new_data]).unique(
+                        subset=["symbol", "trade_date"], keep="last",
+                    ).sort(["symbol", "trade_date"])
+                    _atomic_write_parquet(merged, out)
+                    return merged.height - before, affected
+                _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
+                return new_data.height, affected
         # 自定义源未配置 adj_factor → 回退 TickFlow
 
     if not capset.has(Cap.ADJ_FACTOR):
@@ -1085,10 +1094,11 @@ def sync_minute_batch(
     count: int | None = None,
     batch_size: int | None = None,
     rpm: int | None = None,
-    on_chunk_done: Callable[[int, int, str], None] | None = None,
+    on_chunk_done: Callable[[int, int, str] | None] | None = None,
     segment_trading_days: int = 20,
     on_segment: Callable[[pl.DataFrame], None] | None = None,
     asset_type: AssetType = "stock",
+    raw_basis: bool = False,
 ) -> pl.DataFrame:
     """批量拉取多股分钟 K。
 
@@ -1169,12 +1179,12 @@ def sync_minute_batch(
                         start_time=_datetime_to_ms(cur_start),
                         end_time=_datetime_to_ms(cur_end),
                         count=10000,
-                        adjust="forward",
+                        adjust="none" if raw_basis else "forward",
                         as_dataframe=False, show_progress=False,
                     )
                 else:
                     raw = tf.klines.batch(chunk, period="1m", count=count or 1200,
-                                          adjust="forward",
+                                          adjust="none" if raw_basis else "forward",
                                           as_dataframe=False, show_progress=False)
             except Exception as e:  # noqa: BLE001
                 logger.warning("minute batch fetch failed for %d symbols: %s", len(chunk), e)
@@ -1499,6 +1509,7 @@ def fetch_minute_single(
     asset_type: AssetType = "stock",
     *,
     capset: CapabilitySet,
+    raw_basis: bool = False,
 ) -> pl.DataFrame:
     """实时拉取单股单日分钟 K(不写入本地)。
 
@@ -1531,7 +1542,7 @@ def fetch_minute_single(
             start_time=_datetime_to_ms(start_time),
             end_time=_datetime_to_ms(end_time),
             count=10000,
-            adjust="forward",
+            adjust="none" if raw_basis else "forward",
             as_dataframe=False, show_progress=False,
         )
     except Exception as e:
@@ -1682,8 +1693,10 @@ def sync_and_persist_minute(
     extend_backward: bool = False,
     force_full_days: bool = False,
 ) -> int:
-    """同步分钟 K 并存到 Parquet(前复权价格, SDK 端 adjust=qfq)。返回写入行数。
+    """同步分钟 K 并存到 Parquet。返回写入行数。
 
+    存储口径由基准标记决定 (services/minute_adjust): 存量未迁移 → SDK adjust=qfq
+    前复权 (旧行为); 已迁移 → adjust='none' 原始价落盘, 复权读取时投影。
     使用 start_time / end_time 区间拉取, 确保所有标的覆盖同一时间段。
     on_chunk_done(current, total) 每个 chunk 完成后回调。
     force_full_days=True 时强制回溯 days 自然日 (不增量补, 用于个股补齐历史)。
@@ -1767,6 +1780,7 @@ def sync_and_persist_minute(
         segment_trading_days=segment_days,
         on_segment=_persist,
         asset_type="stock",
+        raw_basis=minute_adjust.minute_basis_is_raw(repo.store.data_dir),
     )
 
     if written_box[0] == 0:

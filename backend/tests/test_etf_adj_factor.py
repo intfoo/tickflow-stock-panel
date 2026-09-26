@@ -1,10 +1,13 @@
-"""ETF 复权因子链路修复 — 回归测试。
+"""ETF 复权因子链路 — 回归测试 (fork 修复 + 上游 issue #362 合并)。
 
-背景: ETF 拆分(如 159967 创成长 2020-11-06)时回测收益假暴跌。根因:
+fork 修复背景: ETF 拆分(如 159967 创成长 2020-11-06)时回测收益假暴跌。根因:
   1. sync_adj_factor 写盘前未过滤响应到请求 symbols → 上游兜底返回的
      全市场股票事件污染 adj_factor_etf (线上实证: 请求 2 只 ETF 返回 5328 只股票)。
   2. daily_pipeline ETF 因子首次同步只拉最近 30 天 → 历史拆分事件永远缺失。
   3. 因子晚到时 ETF enriched 不做受影响标的全日期重算 → 历史分区保持未复权价。
+
+上游 #362: 增量日K 必须用完整本地历史重算前复权 — ETF 路径只把本次
+拉取窗口送进 compute_enriched, 历史分区停在未复权价, 日K 在拆分日留下跳空。
 
 不依赖真实数据源/网络: 全部 monkeypatch mock。
 """
@@ -13,10 +16,33 @@ from __future__ import annotations
 import itertools
 import types
 from datetime import date, datetime
+from types import SimpleNamespace
 
 import polars as pl
+import pytest
 
-from app.services import preferences
+from app.services import index_sync, kline_sync, preferences
+from app.tickflow.capabilities import Cap, CapabilityLimits, CapabilitySet
+from app.tickflow.repository import DataStore, KlineRepository
+
+ETF = "588200.SH"
+PRE = date(2026, 3, 2)
+EX = date(2026, 3, 3)
+NEW = date(2026, 3, 4)
+EX_FACTOR = 1.25
+PRE_RAW = 10.0
+EX_RAW = 8.0
+NEW_RAW = 8.1
+PRE_QFQ = PRE_RAW / EX_FACTOR  # 8.0
+
+
+def _capset() -> CapabilitySet:
+    return CapabilitySet(
+        {
+            Cap.KLINE_DAILY_BATCH: CapabilityLimits(batch=50, rpm=30),
+            Cap.ADJ_FACTOR: CapabilityLimits(batch=50, rpm=30),
+        }
+    )
 
 
 def _repo(tmp_path, earliest=None):
@@ -43,8 +69,6 @@ def _factor_df(rows: list[tuple[str, date, float]]) -> pl.DataFrame:
 
 def test_sync_adj_factor_filters_unrequested_symbols_custom(monkeypatch, tmp_path):
     """自定义源路径: 上游返回非请求 symbol 的行被丢弃, 不落盘不进 affected。"""
-    from app.services import kline_sync
-
     monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "amazingdata")
     resp = _factor_df([
         ("159967.SZ", date(2020, 11, 5), 2.941176),
@@ -69,8 +93,6 @@ def test_sync_adj_factor_filters_unrequested_symbols_custom(monkeypatch, tmp_pat
 
 def test_sync_adj_factor_filters_unrequested_symbols_tickflow(monkeypatch, tmp_path):
     """TickFlow 路径: SDK 返回 dict 中非请求 symbol 同样被过滤。"""
-    from app.services import kline_sync
-
     monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "tickflow")
     resp = {
         "159967.SZ": [{"trade_date": "2020-11-05", "ex_factor": 2.941176}],
@@ -97,8 +119,6 @@ def test_sync_adj_factor_filters_unrequested_symbols_tickflow(monkeypatch, tmp_p
 
 def test_sync_adj_factor_prunes_polluted_etf_existing(monkeypatch, tmp_path):
     """已被污染(全是股票 symbol)的 adj_factor_etf 在 merge 时自 prune。"""
-    from app.services import kline_sync
-
     fdir = tmp_path / "adj_factor_etf"
     fdir.mkdir(parents=True)
     _factor_df([
@@ -123,8 +143,6 @@ def test_sync_adj_factor_prunes_polluted_etf_existing(monkeypatch, tmp_path):
 
 def test_sync_adj_factor_stock_does_not_prune(monkeypatch, tmp_path):
     """股票因子表不 prune: 已调出当前标的池的个股历史因子必须保留。"""
-    from app.services import kline_sync
-
     fdir = tmp_path / "adj_factor"
     fdir.mkdir(parents=True)
     _factor_df([("600000.SH", date(2020, 5, 1), 1.3)]).write_parquet(fdir / "all.parquet")
@@ -151,8 +169,6 @@ def test_sync_adj_factor_stock_does_not_prune(monkeypatch, tmp_path):
 
 def test_etf_adj_sync_start_missing_file_full_history(tmp_path):
     """因子表不存在 → 从 ETF 日K最早日期全历史回补。"""
-    from app.services import index_sync
-
     repo = _repo(tmp_path, earliest=date(2018, 6, 1))
     start = index_sync.etf_adj_sync_start(repo, ["159967.SZ"], datetime(2026, 8, 30))
     assert start == datetime(2018, 6, 1)
@@ -160,8 +176,6 @@ def test_etf_adj_sync_start_missing_file_full_history(tmp_path):
 
 def test_etf_adj_sync_start_missing_file_no_daily(tmp_path):
     """因子表不存在且无 ETF 日K → 兜底最近 365 天。"""
-    from app.services import index_sync
-
     repo = _repo(tmp_path, earliest=None)
     start = index_sync.etf_adj_sync_start(repo, ["159967.SZ"], datetime(2026, 8, 30))
     assert start == datetime(2025, 8, 30)
@@ -169,8 +183,6 @@ def test_etf_adj_sync_start_missing_file_no_daily(tmp_path):
 
 def test_etf_adj_sync_start_incremental_with_lookback(tmp_path):
     """增量: max(trade_date)=2026-08-20 晚于 15 天回看线 → 用回看线 2026-08-15。"""
-    from app.services import index_sync
-
     fdir = tmp_path / "adj_factor_etf"
     fdir.mkdir(parents=True)
     _factor_df([("159967.SZ", date(2026, 8, 20), 1.05)]).write_parquet(fdir / "all.parquet")
@@ -182,8 +194,6 @@ def test_etf_adj_sync_start_incremental_with_lookback(tmp_path):
 
 def test_etf_adj_sync_start_incremental_older_max(tmp_path):
     """增量: max(trade_date)=2026-08-01 早于 15 天回看线 → 用 max(trade_date)。"""
-    from app.services import index_sync
-
     fdir = tmp_path / "adj_factor_etf"
     fdir.mkdir(parents=True)
     _factor_df([("159967.SZ", date(2026, 8, 1), 1.05)]).write_parquet(fdir / "all.parquet")
@@ -195,8 +205,6 @@ def test_etf_adj_sync_start_incremental_older_max(tmp_path):
 
 def test_etf_adj_sync_start_polluted_file_full_history(tmp_path):
     """因子表被污染(过滤到 ETF symbols 后为空) → 视同缺失, 全历史回补。"""
-    from app.services import index_sync
-
     fdir = tmp_path / "adj_factor_etf"
     fdir.mkdir(parents=True)
     _factor_df([("000001.SZ", date(2026, 8, 27), 1.1)]).write_parquet(fdir / "all.parquet")
@@ -244,9 +252,6 @@ def _load_enriched(tmp_path) -> pl.DataFrame:
 
 def test_recompute_etf_enriched_split_continuity(tmp_path):
     """拆分场景: 重算后 enriched close 连续 (无假暴跌), raw_close 保持原始价。"""
-    from app.services import index_sync
-    from app.tickflow.repository import DataStore, KlineRepository
-
     _seed_etf_daily_with_split(tmp_path)
     fdir = tmp_path / "adj_factor_etf"
     fdir.mkdir(parents=True, exist_ok=True)
@@ -273,9 +278,6 @@ def test_recompute_etf_enriched_split_continuity(tmp_path):
 
 def test_recompute_etf_enriched_skips_when_factors_missing(tmp_path):
     """因子表缺失时不重算 — 避免把已复权的 enriched 退回未复权价。"""
-    from app.services import index_sync
-    from app.tickflow.repository import DataStore, KlineRepository
-
     _seed_etf_daily_with_split(tmp_path)
     repo = KlineRepository(DataStore(tmp_path))
     written = index_sync.recompute_etf_enriched_for_symbols(repo, ["159967.SZ"])
@@ -349,3 +351,140 @@ def test_extend_history_etf_recomputes_on_new_factors(monkeypatch, tmp_path):
 
     assert "error" not in result
     assert calls["recompute"] == ["159967.SZ"], "因子晚到应触发受影响 ETF 的全日期重算"
+
+
+# ──────────────────────────────────────────────────────────
+# 上游 issue #362: 增量日K 必须用完整本地历史重算前复权
+# ──────────────────────────────────────────────────────────
+
+
+def _bar(day: date, close: float) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "symbol": [ETF],
+            "date": [day],
+            "open": [close],
+            "high": [close],
+            "low": [close],
+            "close": [close],
+            "volume": [1000.0],
+            "amount": [close * 1000.0],
+        }
+    )
+
+
+def _write_factor(data_dir, day: date, factor: float) -> None:
+    out = data_dir / "adj_factor_etf" / "all.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {"symbol": [ETF], "trade_date": [day], "ex_factor": [factor]},
+        schema={"symbol": pl.String, "trade_date": pl.Date, "ex_factor": pl.Float64},
+    ).write_parquet(out)
+
+
+def _enriched_close(data_dir, day: date) -> float:
+    part = data_dir / "kline_etf_enriched" / f"date={day.isoformat()}" / "part.parquet"
+    df = pl.read_parquet(part).filter(pl.col("symbol") == ETF)
+    assert df.height == 1
+    return float(df["close"][0])
+
+
+def test_etf_incremental_daily_reapplies_adj_to_history(tmp_path, monkeypatch):
+    """本地已有拆分前未复权 enriched, 增量只拉新一日时, 历史收盘必须改写成前复权价。"""
+    repo = KlineRepository(DataStore(tmp_path))
+    repo.append_etf_daily(pl.concat([_bar(PRE, PRE_RAW), _bar(EX, EX_RAW)]))
+    repo.append_etf_enriched(pl.concat([_bar(PRE, PRE_RAW), _bar(EX, EX_RAW)]))
+    _write_factor(tmp_path, EX, EX_FACTOR)
+
+    monkeypatch.setattr(
+        index_sync.kline_sync,
+        "sync_daily_batch",
+        lambda *a, **k: _bar(NEW, NEW_RAW),
+    )
+    monkeypatch.setattr(index_sync.preferences, "get_index_daily_batch_size", lambda: 50)
+
+    written = index_sync.sync_and_persist_etf_daily(
+        repo,
+        _capset(),
+        start_date=datetime(NEW.year, NEW.month, NEW.day),
+        end_date=datetime(NEW.year, NEW.month, NEW.day, 15, 0),
+        symbols_override=[ETF],
+    )
+    assert written == 1
+
+    assert abs(_enriched_close(tmp_path, PRE) - PRE_QFQ) < 1e-9
+    assert abs(_enriched_close(tmp_path, EX) - EX_RAW) < 1e-9
+    assert abs(_enriched_close(tmp_path, NEW) - NEW_RAW) < 1e-9
+    pre = pl.read_parquet(
+        tmp_path / "kline_etf_enriched" / f"date={PRE.isoformat()}" / "part.parquet"
+    ).filter(pl.col("symbol") == ETF)
+    assert abs(float(pre["raw_close"][0]) - PRE_RAW) < 1e-9
+
+
+def test_etf_adj_window_without_file_uses_history_start(tmp_path):
+    start = datetime(2025, 3, 4)
+    got = index_sync.etf_adj_factor_window_start(tmp_path / "missing.parquet", start)
+    assert got == start
+
+
+def test_etf_adj_window_with_file_continues_from_last_event(tmp_path):
+    path = tmp_path / "all.parquet"
+    pl.DataFrame(
+        {
+            "symbol": [ETF, ETF],
+            "trade_date": [date(2025, 6, 1), date(2026, 1, 15)],
+            "ex_factor": [1.05, 1.10],
+        }
+    ).write_parquet(path)
+    got = index_sync.etf_adj_factor_window_start(path, datetime(2025, 3, 4))
+    assert got == datetime(2026, 1, 15, 0, 0)
+
+
+def test_sync_adj_factor_etf_custom_empty_falls_back_to_tickflow(tmp_path, monkeypatch):
+    """扶摇等自定义源对 ETF 空返回时, 有 TickFlow 除权能力则回退, 不能当成无事件。"""
+    repo = KlineRepository(DataStore(tmp_path))
+    empty = pl.DataFrame(
+        schema={
+            "symbol": pl.String,
+            "trade_date": pl.Date,
+            "ex_factor": pl.Float64,
+        }
+    )
+
+    class _EmptyETF:
+        def get_adj_factors(
+            self, symbols, start_time, end_time, asset_type="stock", on_chunk_done=None
+        ):
+            assert asset_type == "etf"
+            return empty
+
+    monkeypatch.setattr(kline_sync.preferences, "get_adj_factor_provider", lambda: "fuyao")
+    from app.data_providers import custom as custom_sources
+
+    monkeypatch.setattr(
+        custom_sources,
+        "provider_has_dataset",
+        lambda name, dataset: name == "fuyao" and dataset == "adj_factor",
+    )
+    monkeypatch.setattr(custom_sources, "get_provider", lambda name: _EmptyETF())
+
+    class _Klines:
+        def ex_factors(self, symbols, **kwargs):
+            return {ETF: [{"trade_date": EX, "ex_factor": EX_FACTOR}]}
+
+    monkeypatch.setattr(
+        kline_sync,
+        "get_client",
+        lambda: SimpleNamespace(klines=_Klines()),
+    )
+
+    written, affected = kline_sync.sync_adj_factor(
+        [ETF],
+        repo,
+        _capset(),
+        asset_type="etf",
+    )
+    assert written == 1
+    assert affected == [ETF]
+    stored = pl.read_parquet(tmp_path / "adj_factor_etf" / "all.parquet")
+    assert stored["ex_factor"][0] == pytest.approx(EX_FACTOR)
