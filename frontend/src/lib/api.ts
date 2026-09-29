@@ -4272,9 +4272,12 @@ export interface EtfFundConfig {
 export interface EtfFundStatus {
   last_sync: string | null
   completed_chunks: string[]
+  incremental: { running: boolean; step: string | null; error: string | null }
   backfill: { running: boolean; total: number; done: number; current: string | null; error: string | null }
   data_range: { min: string | null; max: string | null }
   configured: boolean
+  /** 服务端单飞锁状态 (增量或回填任一进行中) */
+  running: boolean
 }
 
 export interface EtfLeaderboardRow {

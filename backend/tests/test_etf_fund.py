@@ -211,6 +211,22 @@ class TestLeaderboard:
                 "amount": [1e8, 2e8, 3e8],
             }).write_parquet(day / "part.parquet")
 
+    def test_scan_tolerates_quote_ts_schema_drift(self):
+        # 回归: 实时 flush 写的分区带 quote_ts, batch 管道写的不带,
+        # 裸 scan_parquet schema 归一直接 SchemaError → 排行榜 500 (线上 2026-09-24)
+        d = settings.data_dir / "kline_etf_enriched"
+        for dt, with_ts in ((date(2026, 8, 7), False), (date(2026, 8, 10), True)):
+            day = d / f"date={dt.isoformat()}"
+            day.mkdir(parents=True, exist_ok=True)
+            data = {"symbol": ["A"], "date": [dt], "close": [10.0], "amount": [1e8]}
+            if with_ts:
+                data["quote_ts"] = [1786000000000]
+            pl.DataFrame(data).write_parquet(day / "part.parquet")
+        df = etf_fund._scan_etf_enriched(date(2026, 8, 1), date(2026, 8, 31),
+                                         ["symbol", "date", "close", "amount"])
+        assert df.height == 2
+        assert set(df.columns) == {"symbol", "date", "close", "amount"}
+
     def test_change_windows_and_market_cap(self, monkeypatch):
         self._write_enriched()
         store.save_broad(["A"])
@@ -376,6 +392,44 @@ class TestSyncRun:
         assert out["ok"] is True and len(calls) == 2
         assert store.read_share().height == 1
         assert store.load_state()["last_sync"] is not None
+        inc = store.load_state()["incremental"]
+        assert inc == {"running": False, "step": None, "error": None}
+
+    @pytest.mark.asyncio
+    async def test_incremental_failure_persists_error_state(self, monkeypatch):
+        """回归: 增量同步失败此前只在后台任务里 re-raise, 状态无记录,
+        页面无进度无报错 ( fire-and-forget, 异常变 never-retrieved 噪音)。"""
+        monkeypatch.setattr(sync, "resolve_source", lambda: {
+            "name": "amaz", "base_url": "http://h:3021",
+            "headers": {}, "warning": None, "token_env": "TK"})
+
+        async def failing_fetch(src, path, start, end):
+            raise sync.SyncError("上游 503, 重试 3 次后仍失败", 503)
+
+        monkeypatch.setattr(sync, "_fetch_range", failing_fetch)
+        with pytest.raises(sync.SyncError):
+            await sync.run_incremental(repo=None)
+        inc = store.load_state()["incremental"]
+        assert inc["running"] is False
+        assert "503" in inc["error"]
+
+    @pytest.mark.asyncio
+    async def test_trigger_failure_records_state_without_raising(self, monkeypatch):
+        """trigger 后台任务失败不得 re-raise (无人 await), 错误落 state["incremental"]。"""
+        monkeypatch.setattr(sync, "resolve_source", lambda: {
+            "name": "amaz", "base_url": "http://h:3021",
+            "headers": {}, "warning": None, "token_env": "TK"})
+
+        async def failing_fetch(src, path, start, end):
+            raise sync.SyncError("HTTP 请求失败: boom", 502)
+
+        monkeypatch.setattr(sync, "_fetch_range", failing_fetch)
+        assert await sync.trigger("incremental", repo=None) == {"ok": True}
+        # trigger 后台 create_task, 等锁释放即任务结束
+        async with sync._lock:
+            pass
+        assert sync.sync_status()["running"] is False
+        assert "boom" in store.load_state()["incremental"]["error"]
 
     @pytest.mark.asyncio
     async def test_backfill_chunks_resume(self, monkeypatch):

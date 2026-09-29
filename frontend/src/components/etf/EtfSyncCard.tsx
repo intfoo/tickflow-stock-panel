@@ -38,7 +38,7 @@ export function EtfSyncCard() {
   const statusQuery = useQuery({
     queryKey: QK.etfFundStatus,
     queryFn: etfFundApi.getStatus,
-    refetchInterval: (query) => query.state.data?.backfill?.running ? 2000 : false,
+    refetchInterval: (query) => query.state.data?.running ? 2000 : false,
   })
 
   const config = configQuery.data
@@ -121,6 +121,7 @@ export function EtfSyncCard() {
   }
 
   const backfillRunning = status?.backfill?.running ?? false
+  const incrementalRunning = status?.incremental?.running ?? false
   const backfillProgress = status?.backfill?.total
     ? Math.round((status.backfill.done / status.backfill.total) * 100)
     : 0
@@ -191,16 +192,22 @@ export function EtfSyncCard() {
       <div className="flex items-center gap-2">
         <button
           onClick={handleIncremental}
-          disabled={syncMutation.isPending || backfillRunning}
+          disabled={syncMutation.isPending || backfillRunning || incrementalRunning}
           className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
         >
-          {syncMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          {(syncMutation.isPending || incrementalRunning) ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
           同步增量
         </button>
-        {status?.last_sync && (
+        {incrementalRunning && (
+          <span className="text-[10px] text-muted">同步中… {status?.incremental?.step ?? ''}</span>
+        )}
+        {!incrementalRunning && status?.last_sync && (
           <span className="text-[10px] text-muted">最近同步: {status.last_sync}</span>
         )}
       </div>
+      {status?.incremental?.error && (
+        <div className="text-[10px] text-danger">增量同步失败: {status.incremental.error}</div>
+      )}
 
       {/* 回填 */}
       <div className="border-t border-border/50 pt-2 space-y-2">

@@ -13,6 +13,7 @@ from datetime import date, timedelta
 import polars as pl
 
 from app.config import settings
+from app.parquet import scan_enriched_parquet
 from app.services import etf_fund_store as store
 from app.services.etf_broad_presets import effective_broad
 
@@ -75,7 +76,9 @@ def _scan_etf_enriched(start: date, end: date, columns: list[str]) -> pl.DataFra
     files = [f for f in files if f.exists()]
     if not files:
         return pl.DataFrame()
-    lf = pl.scan_parquet(files)
+    # 必须走 scan_enriched_parquet: 实时 flush 写的分区带 quote_ts 列, batch 管道
+    # 写的不带 (反向也成立), 裸 scan_parquet 在 schema 归一时抛 SchemaError → 排行榜 500。
+    lf = scan_enriched_parquet(files)
     existing = [c for c in columns if c in lf.collect_schema().names()]
     if not existing:
         return pl.DataFrame()

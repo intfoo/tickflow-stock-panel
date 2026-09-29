@@ -244,30 +244,51 @@ def _update_data_range() -> None:
         store.save_state(state)
 
 
+def _set_incremental(step: str | None, *, running: bool = True, error: str | None = None) -> None:
+    """更新增量同步进度状态 (页面轮询 /status 展示)。"""
+    state = store.load_state()
+    state["incremental"] = {"running": running, "step": step, "error": error}
+    store.save_state(state)
+
+
 async def run_incremental(repo) -> dict:
     """增量同步: 拉最近 10 天 share+nav → merge → recompute_inflow → 更新 state。
 
-    须持 _lock 调用(经 trigger)。
+    须持 _lock 调用(经 trigger)。进度/错误落 state["incremental"],
+    否则后台任务失败用户完全无感知 (此前仅 last_sync 成功才写)。
     """
-    src = resolve_source()
-    end = date.today()
-    start = end - timedelta(days=_INCREMENTAL_WINDOW)
+    _set_incremental("解析数据源…")
+    try:
+        src = resolve_source()
+        end = date.today()
+        start = end - timedelta(days=_INCREMENTAL_WINDOW)
 
-    share_df = await _fetch_range(src, "/etf/share", start, end)
-    if not share_df.is_empty():
-        store.merge_share(share_df)
-    nav_df = await _fetch_range(src, "/etf/nav", start, end)
-    if not nav_df.is_empty():
-        store.merge_nav(nav_df)
+        _set_incremental(f"拉取份额 [{start} ~ {end}]…")
+        share_df = await _fetch_range(src, "/etf/share", start, end)
+        if not share_df.is_empty():
+            store.merge_share(share_df)
+        _set_incremental("拉取净值…")
+        nav_df = await _fetch_range(src, "/etf/nav", start, end)
+        if not nav_df.is_empty():
+            store.merge_nav(nav_df)
 
-    etf_fund.recompute_inflow(repo)
+        _set_incremental("重算净流入…")
+        etf_fund.recompute_inflow(repo)
 
-    state = store.load_state()
-    state["last_sync"] = end.isoformat()
-    store.save_state(state)
-    _update_data_range()
+        state = store.load_state()
+        state["last_sync"] = end.isoformat()
+        store.save_state(state)
+        _update_data_range()
 
-    return {"ok": True}
+        return {"ok": True}
+    except Exception as e:
+        _set_incremental(None, running=False, error=str(e))
+        raise
+    finally:
+        # 成功路径也要复位 running (错误路径上面已带 error 复位)
+        state = store.load_state()
+        if state.get("incremental", {}).get("running"):
+            _set_incremental(None, running=False)
 
 
 async def run_backfill(repo, start: date, end: date, batch_months: int = 1) -> None:
@@ -357,11 +378,16 @@ async def trigger(
                 if start is None or end is None:
                     raise SyncError("backfill 需要 start 和 end", 422)
                 await run_backfill(repo, start, end, batch_months)
-        except SyncError:
-            raise
         except Exception as e:
+            # 后台任务异常无人 await, 必须落 state 供 /status 展示, 且不再 re-raise
+            # (re-raise 只会变成 "Task exception was never retrieved" 噪音)。
             logger.warning("etf_fund sync (%s) failed: %s", mode, e)
-            raise
+            state = store.load_state()
+            slot = state.get(mode)
+            if isinstance(slot, dict) and not slot.get("error"):
+                slot["error"] = str(e)
+                slot["running"] = False
+                store.save_state(state)
         finally:
             _lock.release()
 

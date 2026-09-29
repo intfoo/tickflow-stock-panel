@@ -24,6 +24,7 @@ _DEFAULT_CONFIG = {"data_source": None, "overlay_index": "000001.SH", "batch_mon
 _DEFAULT_STATE = {
     "last_sync": None,
     "completed_chunks": [],
+    "incremental": {"running": False, "step": None, "error": None},
     "backfill": {"running": False, "total": 0, "done": 0, "current": None, "error": None},
     "data_range": {"min": None, "max": None},
 }
