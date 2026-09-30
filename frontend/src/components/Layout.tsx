@@ -38,6 +38,7 @@ import {
   PanelLeft,
   PanelLeftClose,
   PanelLeftOpen,
+  GitBranch,
 } from 'lucide-react'
 import {
   IconDashboard,
@@ -95,6 +96,7 @@ const nav = [
   { to: '/factors',          label: '因子',     icon: IconFactors },
   { to: '/backtest',         label: '回测',     icon: IconBacktest },
   { to: '/stock-analysis',   label: '个股分析', icon: IconStockFocus },
+  { to: '/czsc-analysis',    label: '缠论分析', icon: GitBranch },
   { to: '/limit-ladder',     label: '连板梯队', icon: IconLadder },
   { to: '/concept-analysis', label: '概念分析', icon: IconConcept },
   { to: '/industry-analysis', label: '行业分析', icon: IconIndustry },

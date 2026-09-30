@@ -8,7 +8,8 @@ import { boardTag } from '@/components/stock-table/primitives'
 
 interface Props {
   onSelect: (symbol: string, name: string) => void
-  /** 搜索资产类型, 逗号分隔 (默认 'stock')。如 'stock,index' */
+  /** 搜索资产类型, 逗号分隔 (默认 'stock')。如 'stock,index'
+   *  透传给 api.instrumentSearch(q, limit, assetTypes) */
   assetTypes?: string
 }
 
