@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import { Activity, LineChart, Loader2, AlertTriangle, PackageOpen, ListChecks, ChevronDown, Search, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
@@ -7,7 +7,7 @@ import { StockFinancialSearch } from '@/components/financials/StockFinancialSear
 import { LastStockChip } from '@/components/LastStockChip'
 import { CzscKChart } from '@/components/czsc/CzscKChart'
 import { api } from '@/lib/api'
-import type { CzscFreq } from '@/lib/api'
+import type { CzscFreq, CzscSignalsCatalog, CzscStatus } from '@/lib/api'
 import { useLastStock } from '@/lib/useLastStock'
 
 const FREQ_OPTIONS: CzscFreq[] = ['日线', '周线', '月线', '季线', '1分钟', '5分钟', '15分钟', '30分钟', '60分钟']
@@ -290,8 +290,8 @@ function CzscAnalysisBoard({ symbol, freq }: { symbol: string; freq: CzscFreq })
 
 // ===== 信号勾选面板 =====
 interface SignalPanelProps {
-  signalsQuery: ReturnType<typeof useQuery>
-  statusQuery: ReturnType<typeof useQuery>
+  signalsQuery: UseQueryResult<CzscSignalsCatalog>
+  statusQuery: UseQueryResult<CzscStatus>
   selectedSignals: string[]
   onApply: (next: string[]) => void
 }

@@ -125,6 +125,7 @@ def test_serialize_field_mapping():
 
     # 构造 mock CZSC 对象测试 _serialize
     from unittest.mock import MagicMock
+
     import pandas as pd
 
     # Mock FX
@@ -198,6 +199,7 @@ def test_signal_marker_extraction():
     pytest.importorskip("czsc")
 
     from unittest.mock import MagicMock
+
     import pandas as pd
 
     # 构造信号 dict list — 模拟4个 bar:
@@ -308,11 +310,13 @@ def test_analyze_signature_daily():
 
 def test_analyze_invalid_freq():
     """未知 freq 应抛 ValueError。"""
-    # is_available 为 True 时才会校验 freq；用 monkeypatch 模拟已装
+    # is_available 为 True 时才会校验 freq; 用 monkeypatch 模拟已装
     from unittest.mock import patch
-    with patch.object(czsc_service, "is_available", return_value=True):
-        with pytest.raises(ValueError, match="不支持的频率"):
-            czsc_service.analyze(repo=None, symbol="000001.SZ", freq="2分钟")
+    with (
+        patch.object(czsc_service, "is_available", return_value=True),
+        pytest.raises(ValueError, match="不支持的频率"),
+    ):
+        czsc_service.analyze(repo=None, symbol="000001.SZ", freq="2分钟")
 
 
 def test_fmt_dt_minute():
@@ -329,8 +333,9 @@ def test_fmt_dt_minute():
 # ---------------------------------------------------------------------------
 def test_resample_daily_weekly():
     """周线聚合: first/last/max/min/sum 正确。"""
-    import polars as pl
     from datetime import date
+
+    import polars as pl
 
     # 10 个交易日跨 2 周 (2025-01-06~10 为第1周, 01-13~17 为第2周)
     df = pl.DataFrame({
@@ -362,8 +367,9 @@ def test_resample_daily_weekly():
 
 def test_resample_daily_monthly():
     """月线聚合: 跨月正确分组。"""
-    import polars as pl
     from datetime import date
+
+    import polars as pl
 
     df = pl.DataFrame({
         "date": [date(2025, 1, 6), date(2025, 1, 20), date(2025, 2, 3), date(2025, 2, 14)],
@@ -385,8 +391,9 @@ def test_resample_daily_monthly():
 
 def test_resample_daily_quarterly():
     """季线聚合: 3 个月一桶。"""
-    import polars as pl
     from datetime import date
+
+    import polars as pl
 
     df = pl.DataFrame({
         "date": [date(2025, 1, 6), date(2025, 2, 3), date(2025, 4, 1), date(2025, 5, 1)],
@@ -411,8 +418,9 @@ def test_resample_daily_quarterly():
 # ---------------------------------------------------------------------------
 def test_fetch_minute_series_stock():
     """_fetch_minute_series stock 路径: 本地有数据 → 返回, 不触发实时补拉。"""
+    from datetime import date, datetime
+
     import polars as pl
-    from datetime import datetime, date
 
     class FakeRepo:
         def get_daily_asset(self, asset_type, symbol, start, end, columns=None):
@@ -449,9 +457,10 @@ def test_fetch_minute_series_live_fallback():
     """本地无分钟K但有日K → 逐日 fetch_minute_single 实时补拉拼接 (不落库)。
     回归: 修复前 stock/etf 本地空直接返回空, 不会实时拉。
     """
-    import polars as pl
-    from datetime import datetime, date
+    from datetime import date, datetime
     from unittest.mock import patch
+
+    import polars as pl
 
     class FakeRepo:
         def get_daily_asset(self, asset_type, symbol, start, end, columns=None):
@@ -479,7 +488,6 @@ def test_fetch_minute_series_live_fallback():
 def test_signal_marker_extraction_value_driven():
     """value 驱动: BS2 的 key 不含 BUY2 但 value 含「二买」→ 能提取。"""
     from datetime import datetime
-    from unittest.mock import MagicMock
 
     class FakeBar:
         def __init__(self, dt, close):
@@ -671,7 +679,7 @@ def test_list_signals():
     # 白名单过滤: 总数受限于白名单, 且仍有一定数量
     assert 20 <= result["total"] <= len(czsc_service.SIGNAL_WHITELIST)
     # 每组元素有必要字段
-    for group_name, items in result["groups"].items():
+    for items in result["groups"].values():
         for item in items:
             assert "name" in item
             assert "category" in item

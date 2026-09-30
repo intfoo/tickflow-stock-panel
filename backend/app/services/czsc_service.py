@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -152,7 +152,7 @@ def analyze(repo, symbol: str, freq: str = "日线", days: int | None = None,
     if not is_available():
         return {
             "available": False,
-            "message": "缠论分析需要 czsc 扩展，请运行: uv sync --extra czsc",
+            "message": "缠论分析需要 czsc 扩展, 请运行: uv sync --extra czsc",
         }
 
     # 校验频率
@@ -186,7 +186,7 @@ def analyze(repo, symbol: str, freq: str = "日线", days: int | None = None,
     elif cfg.family == "minute":
         df_1m = _fetch_minute_series(repo, asset_type, symbol, days)
         if df_1m.is_empty():
-            return _empty_result(symbol, freq, "分钟K数据不足（未同步或非交易日）")
+            return _empty_result(symbol, freq, "分钟K数据不足 (未同步或非交易日)")
 
         # 防御: format_standard_kline / resample_bars 要求 8 列含 amount;
         # 不同数据源 (fetch_minute_single index 实时拉取) 可能缺 amount 列 → 补 0
@@ -247,7 +247,7 @@ def _resample_daily(df, freq_str: str):
     聚合: open=first, close=last, high=max, low=min, volume=sum, amount=sum
     date 取每桶首日。
 
-    周线用 group_by_dynamic(every="1w", start_by="monday")；
+    周线用 group_by_dynamic(every="1w", start_by="monday");
     月线/季线用 dt.year/dt.month/dt.quarter 分组 (group_by_dynamic 的 "1mo" 不按自然月分桶)。
     """
     import polars as pl
@@ -323,6 +323,7 @@ def _fetch_minute_series(repo, asset_type: str, symbol: str, days: int):
     index:     无持久化, 逐日 fetch_minute_single 实时拉取拼接。
     """
     import polars as pl
+
     from app.services import kline_sync
     end = date.today()
     start = end - timedelta(days=days * 2)
@@ -355,7 +356,7 @@ def _fetch_minute_series(repo, asset_type: str, symbol: str, days: int):
                 sub = kline_sync.fetch_minute_single(symbol, d, asset_type=asset_type)
                 if not sub.is_empty():
                     parts.append(sub)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning("minute fetch failed %s %s", symbol, d, exc_info=True)
         if not parts:
             return pl.DataFrame()
@@ -368,7 +369,7 @@ def _fetch_minute_series(repo, asset_type: str, symbol: str, days: int):
             sub = kline_sync.fetch_minute_single(symbol, d, asset_type="index")
             if not sub.is_empty():
                 parts.append(sub)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("index minute fetch failed %s %s", symbol, d, exc_info=True)
     return pl.concat(parts, how="diagonal_relaxed") if parts else pl.DataFrame()
 
@@ -415,7 +416,7 @@ def _build_signals_config(
 def list_signals() -> dict:
     """返回 czsc 全信号目录 (按 namespace 分组)。
 
-    调 czsc._native.list_all_signals(include_kline=True, include_trader=False)，
+    调 czsc._native.list_all_signals(include_kline=True, include_trader=False),
     只取 kline 类信号 (trader 类不能跑)。
     czsc 未装时返回 {available: false, groups: {}, total: 0}。
     """
@@ -590,11 +591,11 @@ def _serialize(c, signals_result: list[dict], symbol: str, freq: str = "日线",
             nb = fx.new_bars
             if nb and len(nb) >= 3:
                 confirm_dt = _fmt_dt(nb[2].dt, minute)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("fx new_bars unavailable, fallback confirm_dt=fx.dt", exc_info=True)
         try:
             power = fx.power_str  # 分型强度: 强/中/弱 (czsc FX 内置判定)
-        except Exception:  # noqa: BLE001
+        except Exception:
             power = ""
         fx_out.append({
             "dt": _fmt_dt(fx.dt, minute),
@@ -684,7 +685,7 @@ def _extract_zs_from_bis(bi_list, minute: bool = False) -> list:
                 i += 3
             else:
                 i += 1
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("ZS extraction failed, returning empty list", exc_info=True)
     return out
 
@@ -853,7 +854,7 @@ def _fx_confirm_dt(fx, minute: bool) -> str:
         nb = fx.new_bars
         if nb and len(nb) >= 3:
             return _fmt_dt(nb[2].dt, minute)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return _fmt_dt(fx.dt, minute)
 

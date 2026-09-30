@@ -32,7 +32,7 @@ def analyze(
     if not czsc_service.is_available():
         return {
             "available": False,
-            "message": "缠论分析需要 czsc 扩展，请运行: uv sync --extra czsc",
+            "message": "缠论分析需要 czsc 扩展, 请运行: uv sync --extra czsc",
         }
 
     repo = request.app.state.repo
