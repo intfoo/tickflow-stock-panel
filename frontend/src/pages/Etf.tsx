@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Settings2, Database } from 'lucide-react'
 import { etfFundApi } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { toast } from '@/components/Toast'
 import { FundFlowChart } from '@/components/etf/FundFlowChart'
 import { ZoneChart } from '@/components/etf/ZoneChart'
 import { EtfLeaderboard } from '@/components/etf/EtfLeaderboard'
@@ -32,6 +33,27 @@ export function Etf() {
       setOverlayIndex(configOverlay)
     }
   }, [configOverlay]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 同步状态监听 — 手动同步 (增量/回填) 结束后自动刷新页面数据。
+  // 放页面级而非 EtfSyncCard: 卡片折叠即卸载, 轮询与回调都会中断。
+  const statusQuery = useQuery({
+    queryKey: QK.etfFundStatus,
+    queryFn: etfFundApi.getStatus,
+    refetchInterval: (query) => query.state.data?.running ? 2000 : false,
+  })
+  const syncRunning = statusQuery.data?.running ?? false
+  const prevRunningRef = useRef<boolean | null>(null)
+  useEffect(() => {
+    const prev = prevRunningRef.current
+    prevRunningRef.current = syncRunning
+    if (prev === true && !syncRunning) {
+      // 前缀失效: 排行榜/资金流/风险区/状态等全部 etf-fund 查询一起刷新
+      qc.invalidateQueries({ queryKey: ['etf-fund'] })
+      const err = statusQuery.data?.incremental?.error ?? statusQuery.data?.backfill?.error
+      if (err) toast(`同步失败: ${err}`, 'error')
+      else toast('同步完成，数据已刷新', 'success')
+    }
+  }, [syncRunning]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 资金流数据 — 全量加载 (API 上限 750 交易日 ≈ 3 年), dataZoom 默认聚焦最近 120 天
   const flowQuery = useQuery({
