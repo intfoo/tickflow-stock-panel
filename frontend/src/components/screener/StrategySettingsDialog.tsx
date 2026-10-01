@@ -4,6 +4,7 @@ import { X, Settings2, RotateCcw, Save, ChevronDown, Filter, Star, TrendingUp, S
 import { api, type StrategyDetail, type StrategyParamDef, type CompositeChildInfo, type ScoringDirection } from '@/lib/api'
 import { toPercentages, normalizeWeights } from '@/lib/weights'
 import { groupParams, visibleParams } from '@/lib/strategyParams'
+import { toast } from '@/components/Toast'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { color } from '@/lib/colors'
 import { SignalPicker } from './SignalPicker'
@@ -153,8 +154,11 @@ function ParamField({ def, value, onChange, onApplyValues }: {
           onChange={e => {
             const v = e.target.value
             const applies = def.option_applies?.[v]
-            if (applies && onApplyValues) onApplyValues({ [def.id]: v, ...applies })
-            else onChange(v)
+            if (applies && onApplyValues) {
+              onApplyValues({ [def.id]: v, ...applies })
+              // 预设会覆盖其他参数的当前值, 显式提示避免静默改动
+              toast(`已应用预设「${v}」，覆盖 ${Object.keys(applies).length} 个参数`, 'success')
+            } else onChange(v)
           }}
           className="w-24 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground focus:outline-none focus:border-accent/50"
         >

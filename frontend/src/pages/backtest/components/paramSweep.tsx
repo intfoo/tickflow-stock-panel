@@ -117,7 +117,13 @@ export function useParamSweep(strategies: StrategyDetail[], onStrategyChange?: (
     return grid
   }
 
-  return { strategyId, selected, selectStrategy, params, sweeps, updateSweep, combos, gridError, buildGrid }
+  // 因级联规则 (visible_if) 在默认配置下隐藏、不参与扫描的参数, 供 UI 提示
+  const hiddenParamLabels = useMemo(
+    () => (selected?.params ?? []).filter(p => !params.includes(p)).map(p => p.label),
+    [selected, params],
+  )
+
+  return { strategyId, selected, selectStrategy, params, sweeps, updateSweep, combos, gridError, buildGrid, hiddenParamLabels }
 }
 
 /** 策略选择器。 */
@@ -135,15 +141,22 @@ export function StrategySelect({ strategies, value, onChange }: {
 }
 
 /** 可扫参数列表 (勾选 + min/max/step)。 */
-export function SweepParamList({ params, sweeps, updateSweep }: {
+export function SweepParamList({ params, sweeps, updateSweep, hiddenLabels = [] }: {
   params: StrategyParamDef[]
   sweeps: Record<string, Sweep>
   updateSweep: (pid: string, patch: Partial<Sweep>) => void
+  /** 因级联规则 (visible_if) 在默认配置下隐藏的参数标签, 仅作提示 */
+  hiddenLabels?: string[]
 }) {
   if (!params.length) return null
   return (
     <div>
       <div className="mb-1.5 text-xs font-medium text-secondary">扫描参数 (勾选后设范围)</div>
+      {hiddenLabels.length > 0 && (
+        <div className="mb-1.5 text-[11px] text-muted">
+          {hiddenLabels.length} 个参数因级联规则在默认配置下隐藏，不参与扫描：{hiddenLabels.join('、')}
+        </div>
+      )}
       <div className="space-y-2">
         {params.map(p => {
           const s = sweeps[p.id] ?? defaultSweep(p)

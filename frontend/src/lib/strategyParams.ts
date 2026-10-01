@@ -12,11 +12,17 @@ function evalVisibleIf(
   values: Record<string, any>,
   allParams?: StrategyParamDef[],
 ): boolean {
-  if (cond.all?.length) return cond.all.every(c => evalVisibleIf(c, values, allParams))
-  if (cond.any?.length) return cond.any.some(c => evalVisibleIf(c, values, allParams))
+  // 空集合语义: all:[] 按空真(vacuous true)处理; any:[] 无候选可成立 → false
+  if (cond.all !== undefined) return cond.all.every(c => evalVisibleIf(c, values, allParams))
+  if (cond.any !== undefined) return cond.any.length > 0 && cond.any.some(c => evalVisibleIf(c, values, allParams))
   if (cond.param) {
     const actual = values[cond.param] ?? allParams?.find(x => x.id === cond.param)?.default
-    return (cond.in ?? []).includes(actual)
+    const expected = cond.in ?? []
+    if (typeof actual === 'boolean') {
+      // 容错: META 里 bool 条件的 in 值误写字符串 "true"/"false" 也能匹配
+      return expected.some(e => e === actual || String(e).toLowerCase() === String(actual))
+    }
+    return expected.includes(actual)
   }
   return true
 }

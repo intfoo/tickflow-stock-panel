@@ -35,7 +35,8 @@ META = {
         "exclude_st": True,
         "exclude_new_days": 30,
     },
-    "params": [],  # type: float/int/bool/select/date；float/int 带 min/max/step
+    "params": [],  # type: float/int/bool/select/date/string；float/int 带 min/max/step
+    # 可选 UI 元数据: group 分组节标题 / visible_if 级联显隐 / option_applies 预设批量应用
     "scoring": {},
     "order_by": "score",
     "descending": True,

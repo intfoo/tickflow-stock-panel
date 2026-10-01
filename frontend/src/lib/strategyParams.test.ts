@@ -24,6 +24,24 @@ describe('isParamVisible', () => {
     expect(isParamVisible(def, {}, [pool, def])).toBe(false)
   })
 
+  it('边界: 空 all 为空真、空 any 为 false', () => {
+    expect(isParamVisible(p('a', { visible_if: { all: [] } }), {})).toBe(true)
+    expect(isParamVisible(p('a', { visible_if: { any: [] } }), {})).toBe(false)
+  })
+
+  it('边界: 引用不存在的 param → 隐藏（不报错）', () => {
+    const def = p('a', { visible_if: { param: 'nonexistent', in: [1] } })
+    expect(isParamVisible(def, {})).toBe(false)
+  })
+
+  it('bool 容错: in 值误写字符串 "true"/"True" 也能匹配布尔值', () => {
+    const def = p('use_x', { type: 'bool', default: true, visible_if: { param: 'use_x', in: ['true'] } })
+    expect(isParamVisible(def, { use_x: true }, [def])).toBe(true)
+    expect(isParamVisible(def, { use_x: false }, [def])).toBe(false)
+    const def2 = p('use_x', { type: 'bool', default: true, visible_if: { param: 'use_x', in: ['True'] } })
+    expect(isParamVisible(def2, { use_x: true }, [def2])).toBe(true)
+  })
+
   it('递归: all / any 组合（标的池联动场景）', () => {
     // 显示条件 = pool ∈ presets OR (pool=custom AND use_gold)
     const def = p('tp_gold', {
@@ -60,6 +78,19 @@ describe('visibleParams / groupParams', () => {
       ['标的池', 1],
       ['动量', 1],
       ['止盈', 2],
+    ])
+  })
+
+  it('非相邻同组名不归并（保序分节）', () => {
+    const groups = groupParams([
+      p('a', { group: 'X' }),
+      p('b', { group: 'Y' }),
+      p('c', { group: 'X' }),
+    ])
+    expect(groups.map(g => [g.name, g.items.length])).toEqual([
+      ['X', 1],
+      ['Y', 1],
+      ['X', 1],
     ])
   })
 })

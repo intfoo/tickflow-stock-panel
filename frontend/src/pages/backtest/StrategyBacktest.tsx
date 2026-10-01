@@ -749,8 +749,11 @@ function StrategyParamInput({ param, value, onChange, onApplyValues }: {
           onChange={e => {
             const v = e.target.value
             const applies = param.option_applies?.[v]
-            if (applies && onApplyValues) onApplyValues({ [param.id]: v, ...applies })
-            else onChange(v)
+            if (applies && onApplyValues) {
+              onApplyValues({ [param.id]: v, ...applies })
+              // 预设会覆盖其他参数的当前值, 显式提示避免静默改动
+              toast(`已应用预设「${v}」，覆盖 ${Object.keys(applies).length} 个参数`, 'success')
+            } else onChange(v)
           }}
           className={INPUT_CLS}
         >
