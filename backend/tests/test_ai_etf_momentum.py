@@ -532,3 +532,132 @@ def test_e2e_classic4_anchor():
     print(f"\n[e2e] annual_return={annual_return:.4f}")
     assert 0.43 <= annual_return <= 0.53, \
         f"年化 {annual_return:.4f} 不在 [0.43, 0.53] 范围内"
+
+
+# ═══════════════════════════════════════════════════════════════
+#  开关池（use_* ∪ pool_custom）与分标的止盈/锁定
+# ═══════════════════════════════════════════════════════════════
+
+_resolve_pool = _mod._resolve_pool
+_parse_custom_entries = _mod._parse_custom_entries
+
+
+def test_preset_applies_match_pools():
+    """前端预设元数据（option_applies）与 POOLS 成员/默认止盈锁定一致。"""
+    applies = _mod._POOL_PRESET_APPLIES
+    assert set(applies) == set(POOLS)
+    # classic4: 四只开、其余关；止盈/锁定默认值随行
+    c4 = applies["classic4"]
+    assert c4["use_hs300"] is True and c4["use_growth"] is False
+    assert c4["use_sp500"] is False
+    assert c4["tp_gold"] == 0.05 and c4["lock_nasdaq"] == 15
+    # no_hs300: 仅 hs300 关
+    assert applies["no_hs300"]["use_hs300"] is False
+    assert applies["no_hs300"]["use_gold"] is True
+    # classic5: growth 开
+    assert applies["classic5_concept"]["use_growth"] is True
+    assert applies["classic5_concept"]["tp_growth"] == 0.12
+
+
+def test_resolve_pool_defaults_ignores_pool_key():
+    """池 = 开关 ∪ 输入框；旧 pool 参数（纯 UI 预设）被后端忽略。"""
+    # 默认开关 = classic4
+    assert set(_resolve_pool({})) == set(POOLS["classic4"])
+    # 旧版 pool 参数不影响解析（包括历史遗留的 custom 值）
+    assert set(_resolve_pool({"pool": "no_hs300"})) == set(POOLS["classic4"])
+    assert set(_resolve_pool({"pool": "custom"})) == set(POOLS["classic4"])
+
+
+def test_resolve_pool_swap_hs300_for_sp500():
+    """复选框场景：取消沪深300、勾上标普500 → 池完成替换。"""
+    pool = _resolve_pool({"use_hs300": False, "use_sp500": True})
+    assert "510300.SH" not in pool
+    assert "513500.SH" in pool
+    assert {"159934.SZ", "513100.SH", "159915.SZ"} <= set(pool)
+
+
+def test_resolve_pool_free_fill_and_fallback():
+    """自由填写解析（全角逗号/空白/去重）；全不选+不填 → 回退 classic4。"""
+    pool = _resolve_pool({"pool_custom": "518880.SH，513180.SH 518880.SH"})
+    assert "518880.SH" in pool and "513180.SH" in pool
+    assert len([s for s in pool if s == "518880.SH"]) == 1, "重复代码应去重"
+    # 手滑全不选 → 回退 classic4 防空仓静默
+    off = {pid: False for pid, _ in _mod._USE_PARAM.values()}
+    assert _resolve_pool(off) == POOLS["classic4"]
+
+
+def test_parse_custom_entries():
+    """输入框条目：代码 / 代码:止盈 / 代码:止盈:锁定；错误数值字段按缺失处理。"""
+    assert _parse_custom_entries("") == []
+    assert _parse_custom_entries("518880.SH") == [("518880.SH", None, None)]
+    assert _parse_custom_entries("513500.SH:0.15") == [("513500.SH", 0.15, None)]
+    assert _parse_custom_entries("513500.SH:0.15:20") == [("513500.SH", 0.15, 20)]
+    # 错误数值按缺失；空代码条目跳过；重复代码去重（保首个）
+    assert _parse_custom_entries(":0.1,513500.SH:abc,513500.SH:0.15") == [
+        ("513500.SH", 0.15, None),
+    ]
+
+
+def test_pool_excludes_unchecked_symbol():
+    """未勾选标的不交易（即使动量最强），勾选/填入标的正常买入。"""
+    t_n, m = 80, 25
+    close_300 = 100.0 * np.power(1.02, np.arange(t_n))     # 最强但在池外
+    close_gold = 100.0 * np.power(1.003, np.arange(t_n))
+    close_sp500 = 100.0 * np.power(1.005, np.arange(t_n))  # 池内最强
+    close = np.column_stack([close_300, close_gold, close_sp500])
+    symbols = ("510300.SH", "159934.SZ", "513500.SH")
+    params = {
+        "m_days": m, "pos_sl": 0.10,
+        "use_hs300": False, "use_sp500": True,
+        "tp_gold": 99.0, "tp_sp500": 99.0,  # 隔离止盈路径
+    }
+    signals = MATRIX_STRATEGY.compute_signals(_make_market(close, symbols), params)
+    col_300 = symbols.index("510300.SH")
+    col_sp500 = symbols.index("513500.SH")
+    assert signals.entry[:, col_300].sum() == 0, "未勾选的 510300 绝不应买入"
+    assert signals.exit[:, col_300].sum() == 0
+    assert signals.entry[:, col_sp500].sum() >= 1, "勾选的 513500 应被买入"
+
+
+def test_tp_lock_per_symbol_priority():
+    """止盈优先级：专用参数 > pool_custom 内联配置 > 内置默认 0.12。
+
+    构造持续日涨 0.5% 的标的（m=20，t=19 首次买入）：
+    - 输入框自由标的 518880.SH：内联 tp=0.05 应比内置默认 0.12 显著提前止盈；
+    - 勾选的 513500.SH：专用 tp_sp500=0.20 应压过输入框内联 0.05（>30 根才止盈）。
+    """
+    t_n, m = 100, 20
+    close_flat = np.full(t_n, 100.0)  # 走平陪跑（承接止盈后换仓）
+    up = 100.0 * np.power(1.005, np.arange(t_n))
+
+    def _first_tp_day(symbols, close, params):
+        sig = MATRIX_STRATEGY.compute_signals(_make_market(close, symbols), params)
+        col = 0
+        days = np.where(
+            (sig.exit[:, col] == 1) & (sig.exit_signal_code[:, col] == 0)
+        )[0]
+        return int(days[0]) if len(days) else None
+
+    base = {
+        "m_days": m, "pos_sl": 0.0,
+        "use_nasdaq": False, "use_hs300": False, "use_cyb": False,
+        "tp_gold": 99.0,  # 陪跑标的隔离止盈
+    }
+    # 输入框自由标的：内联 0.05 vs 内置默认 0.12
+    symbols = ("518880.SH", "159934.SZ")
+    close = np.column_stack([up, close_flat])
+    day_inline = _first_tp_day(symbols, close, {**base, "pool_custom": "518880.SH:0.05"})
+    day_default = _first_tp_day(symbols, close, {**base, "pool_custom": "518880.SH"})
+    assert day_inline is not None and day_default is not None
+    assert day_inline < day_default, \
+        f"内联 tp=0.05 应早于内置默认 0.12（{day_inline} 应 < {day_default}）"
+
+    # 勾选标的：专用 tp_sp500=0.20 压过内联 0.05
+    symbols2 = ("513500.SH", "159934.SZ")
+    close2 = np.column_stack([up, close_flat])
+    day_dedicated = _first_tp_day(symbols2, close2, {
+        **base, "use_sp500": True, "tp_sp500": 0.20,
+        "pool_custom": "513500.SH:0.05",
+    })
+    assert day_dedicated is not None and day_dedicated > 30, \
+        f"专用参数应优先于内联配置（止盈日 {day_dedicated} 应 > 30）"

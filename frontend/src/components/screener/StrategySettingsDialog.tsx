@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { X, Settings2, RotateCcw, Save, ChevronDown, Filter, Star, TrendingUp, Sparkles, Download, Layers, Plus, Trash2 } from 'lucide-react'
 import { api, type StrategyDetail, type StrategyParamDef, type CompositeChildInfo, type ScoringDirection } from '@/lib/api'
 import { toPercentages, normalizeWeights } from '@/lib/weights'
+import { groupParams, visibleParams } from '@/lib/strategyParams'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { color } from '@/lib/colors'
 import { SignalPicker } from './SignalPicker'
@@ -116,10 +117,12 @@ export function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, un
 export const ALL_BOARDS = ['沪主板', '深主板', '创业板', '科创板', '北交所']
 
 // 策略参数字段
-function ParamField({ def, value, onChange }: {
+function ParamField({ def, value, onChange, onApplyValues }: {
   def: StrategyParamDef
   value: any
   onChange: (v: any) => void
+  /** select 带 option_applies 时, 选中某选项需批量应用一组参数值 (如标的池预设) */
+  onApplyValues?: (values: Record<string, any>) => void
 }) {
   if (def.type === 'bool') {
     const checked = value === true || value === 'true' || value === 'True'
@@ -147,7 +150,12 @@ function ParamField({ def, value, onChange }: {
         <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
         <select
           value={value ?? def.default}
-          onChange={e => onChange(e.target.value)}
+          onChange={e => {
+            const v = e.target.value
+            const applies = def.option_applies?.[v]
+            if (applies && onApplyValues) onApplyValues({ [def.id]: v, ...applies })
+            else onChange(v)
+          }}
           className="w-24 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground focus:outline-none focus:border-accent/50"
         >
           {def.options.map(o => <option key={o} value={o}>{o}</option>)}
@@ -155,6 +163,20 @@ function ParamField({ def, value, onChange }: {
       </div>
     )
   }
+  if (def.type === 'string') {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
+        <input
+          type="text"
+          value={value ?? def.default ?? ''}
+          onChange={e => onChange(e.target.value)}
+          className="flex-1 min-w-0 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground focus:outline-none focus:border-accent/50"
+        />
+      </div>
+    )
+  }
+
 
   return (
     <div className="flex items-center gap-2">
@@ -557,8 +579,17 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                   <div className="space-y-3">
                     {detail.params.length > 0 ? (
                       <Section icon={Settings2} title="策略参数" accent="text-muted">
-                        <div className="space-y-1.5">
-                          {detail.params.map(p => <ParamField key={p.id} def={p} value={params[p.id]} onChange={v => setParams({ ...params, [p.id]: v })} />)}
+                        <div className="space-y-2.5">
+                          {groupParams(visibleParams(detail.params, params)).map((g, gi) => (
+                            <div key={g.name ?? `ug${gi}`}>
+                              {g.name && (
+                                <div className="mb-1 border-b border-border/20 pb-0.5 text-[10px] font-medium text-muted/70">{g.name}</div>
+                              )}
+                              <div className="space-y-1.5">
+                                {g.items.map(p => <ParamField key={p.id} def={p} value={params[p.id]} onChange={v => setParams({ ...params, [p.id]: v })} onApplyValues={values => setParams(prev => ({ ...prev, ...values }))} />)}
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </Section>
                     ) : (
