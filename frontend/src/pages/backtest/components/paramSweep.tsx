@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { StrategyDetail, StrategyParamDef } from '@/lib/api'
-import { visibleParams } from '@/lib/strategyParams'
+import { paramDisplayLabel, visibleParams } from '@/lib/strategyParams'
 
 /** 参数扫描配置的共享逻辑与 UI — 优化器与 walk-forward 复用。 */
 
@@ -118,8 +118,9 @@ export function useParamSweep(strategies: StrategyDetail[], onStrategyChange?: (
   }
 
   // 因级联规则 (visible_if) 在默认配置下隐藏、不参与扫描的参数, 供 UI 提示
+  // (paramDisplayLabel: 平铺列表无组上下文, 短标签需带组名才可区分)
   const hiddenParamLabels = useMemo(
-    () => (selected?.params ?? []).filter(p => !params.includes(p)).map(p => p.label),
+    () => (selected?.params ?? []).filter(p => !params.includes(p)).map(p => paramDisplayLabel(p)),
     [selected, params],
   )
 
@@ -166,7 +167,7 @@ export function SweepParamList({ params, sweeps, updateSweep, hiddenLabels = [] 
             return (
               <div key={p.id} className="rounded-input border border-border/60 p-2">
                 <div className="flex items-center gap-2 text-xs">
-                  <span className="font-medium text-muted">{p.label}</span>
+                  <span className="font-medium text-muted">{paramDisplayLabel(p)}</span>
                   <span className="text-muted">({p.type})</span>
                   <span className="text-[11px] text-muted">文本参数不可扫描</span>
                 </div>
@@ -177,7 +178,7 @@ export function SweepParamList({ params, sweeps, updateSweep, hiddenLabels = [] 
             <div key={p.id} className="rounded-input border border-border/60 p-2">
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={s.enabled} onChange={e => updateSweep(p.id, { enabled: e.target.checked })} />
-                <span className="font-medium text-foreground">{p.label}</span>
+                <span className="font-medium text-foreground">{paramDisplayLabel(p)}</span>
                 <span className="text-secondary">({p.type})</span>
               </label>
               {s.enabled && numeric && (
