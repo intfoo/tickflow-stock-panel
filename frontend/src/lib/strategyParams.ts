@@ -48,6 +48,14 @@ export interface ParamGroup {
   items: StrategyParamDef[]
 }
 
+/**
+ * 带分组前缀的展示标签。分组内短标签（如「止盈」「入池」）脱离分组上下文后
+ * 不可区分（扫描面板是平铺列表），限定为「组名 · 标签」。
+ */
+export function paramDisplayLabel(p: StrategyParamDef): string {
+  return p.group ? `${p.group} · ${p.label}` : p.label
+}
+
 export function groupParams(params: StrategyParamDef[]): ParamGroup[] {
   const groups: ParamGroup[] = []
   for (const p of params) {
