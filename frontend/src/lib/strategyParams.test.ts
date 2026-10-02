@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StrategyParamDef } from '@/lib/api'
-import { groupParams, isParamVisible, visibleParams } from '@/lib/strategyParams'
+import { groupParams, isParamVisible, paramDisplayLabel, visibleParams } from '@/lib/strategyParams'
 
 const p = (id: string, extra: Partial<StrategyParamDef> = {}): StrategyParamDef => ({
   id,
@@ -92,5 +92,14 @@ describe('visibleParams / groupParams', () => {
       ['Y', 1],
       ['X', 1],
     ])
+  })
+})
+
+describe('paramDisplayLabel', () => {
+  it('有组名加「组名 · 标签」前缀（平铺列表可区分），无组名原样', () => {
+    expect(paramDisplayLabel(p('tp_gold', { label: '止盈', group: '黄金 159934.SZ' })))
+      .toBe('黄金 159934.SZ · 止盈')
+    expect(paramDisplayLabel(p('m_days', { label: '动量窗口(交易日)' })))
+      .toBe('动量窗口(交易日)')
   })
 })
