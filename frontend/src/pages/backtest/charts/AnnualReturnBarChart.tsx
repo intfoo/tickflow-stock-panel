@@ -176,7 +176,7 @@ export function AnnualReturnBarChart({ analysis, benchmarkCurve, range }: Props)
                 distance: 4,
                 fontSize: 9,
                 color: ct.text,
-                formatter: (p: any) => `${(p.value[0] as number).toFixed(1)}`,
+                formatter: (p: any) => `${(p.value[0] as number).toFixed(1)}%`,
               },
               z: 3,
             } as const]
@@ -185,7 +185,7 @@ export function AnnualReturnBarChart({ analysis, benchmarkCurve, range }: Props)
     }
   }, [analysis, overlay, overlayName, ct])
 
-  const chartRef = useECharts(option, [analysis, overlay, ct])
+  const chartRef = useECharts(option, [analysis, overlay, overlayName, ct])
 
   const height = Math.max(120, analysis.years.length * 34 + 48)
   return (
