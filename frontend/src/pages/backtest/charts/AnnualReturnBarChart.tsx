@@ -19,6 +19,10 @@ const OVERLAY_INDEXES = [
 const LS_KEY = 'backtest_returns_index'
 const BENCHMARK_SYMBOL = '000001.SH'
 
+// 涨跌色 — 与 index.css --bull/--bear (#F04438/#12B76A) 一致; 画布不吃 CSS 变量需硬编码
+const BULL = '#F04438'
+const BEAR = '#12B76A'
+
 interface Props {
   analysis: ReturnsAnalysis
   /** 回测结果自带的上证基准曲线；选上证时零请求直接复用 (与净值曲线图同口径) */
@@ -84,7 +88,7 @@ export function AnnualReturnBarChart({ analysis, benchmarkCurve, range }: Props)
     const vals = rows.map(r => ({
       value: Number((r.annual * 100).toFixed(2)),
       itemStyle: {
-        color: r.annual >= 0 ? ct.bull : ct.bear,
+        color: r.annual >= 0 ? BULL : BEAR,
         opacity: r.partial ? 0.6 : 1,
       },
       // 负值 bar 向左延伸，标签放左端避免与 0 轴重叠

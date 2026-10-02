@@ -1,21 +1,22 @@
-import { useChartTheme } from '@/lib/theme'
 import { fmtRet, type ReturnsAnalysis } from '../returnsAnalysis'
 
 const MONTH_LABELS = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
+
+// 涨跌色 — 与 index.css --bull/--bear (#F04438/#12B76A) 一致; 画布不吃 CSS 变量需硬编码
+const BULL_RGB = '240,68,56'
+const BEAR_RGB = '18,183,106'
 
 /**
  * 月度收益热力图 — DOM 表格实现（DimensionHeatmap 同款思路），
  * 单元格背景按收益绝对值在 [0, maxAbsMonthly] 上归一着色：正红负绿、0 中性。
  */
 export function MonthlyReturnHeatmap({ analysis }: { analysis: ReturnsAnalysis }) {
-  const ct = useChartTheme()
-
   const cellBg = (r: number | null): string | undefined => {
     if (r == null || r === 0) return undefined
     const t = Math.min(Math.abs(r) / analysis.maxAbsMonthly, 1)
     // 低收益也给一点底色保持可读，高收益趋向饱和
     const alpha = 0.10 + 0.55 * Math.sqrt(t)
-    return r > 0 ? ct.bullAlpha(alpha) : ct.bearAlpha(alpha)
+    return r > 0 ? `rgba(${BULL_RGB},${alpha})` : `rgba(${BEAR_RGB},${alpha})`
   }
   const cellText = (r: number | null): string => {
     if (r == null) return 'text-muted/40'
