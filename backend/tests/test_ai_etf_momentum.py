@@ -544,6 +544,12 @@ _parse_custom_entries = _mod._parse_custom_entries
 
 def test_preset_applies_match_pools():
     """前端预设元数据（option_applies）与 POOLS 成员/默认止盈锁定一致。"""
+    # META 必须纯字面量 (save API 用 ast.literal_eval 校验), 此处断言字面量与计算版一致
+    pool_param = _mod.META["params"][0]
+    assert pool_param["id"] == "pool"
+    assert pool_param["options"] == list(POOLS)
+    assert pool_param["option_applies"] == _mod._POOL_PRESET_APPLIES
+
     applies = _mod._POOL_PRESET_APPLIES
     assert set(applies) == set(POOLS)
     # classic4: 四只开、其余关；止盈/锁定默认值随行
