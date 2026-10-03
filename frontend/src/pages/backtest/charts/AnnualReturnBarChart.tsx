@@ -102,8 +102,7 @@ export function AnnualReturnBarChart({ analysis, benchmarkCurve, range }: Props)
       : []
 
     return {
-      // left 留白容纳「2025 (截至10月)」长年份标签; right 容纳柱端/markLine 标签
-      grid: { left: 108, right: 64, top: 20, bottom: 24 },
+      grid: { left: 92, right: 56, top: 20, bottom: 24 },
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
