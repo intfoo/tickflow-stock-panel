@@ -146,6 +146,8 @@ export function AnnualReturnBarChart({ analysis, benchmarkCurve, range }: Props)
             fontSize: 10,
             formatter: (p: any) => `${(p.value as number).toFixed(1)}%`,
           },
+          // 极端负值的标签会探出绘图区压到年份轴, 重叠时隐藏 (tooltip 仍可见数值)
+          labelLayout: { hideOverlap: true },
           markLine:
             analysis.avgAnnual != null
               ? {
@@ -167,9 +169,11 @@ export function AnnualReturnBarChart({ analysis, benchmarkCurve, range }: Props)
               name: overlayName,
               type: 'scatter',
               symbol: 'diamond',
-              symbolSize: 9,
+              symbolSize: 11,
               data: overlayData,
-              itemStyle: { color: '#64748b' },
+              // 白描边把 marker 从红/绿柱体上剥开, 重叠时也可辨
+              itemStyle: { color: '#64748b', borderColor: '#fff', borderWidth: 1.5 },
+              labelLayout: { hideOverlap: true },
               label: {
                 show: true,
                 position: 'top',
