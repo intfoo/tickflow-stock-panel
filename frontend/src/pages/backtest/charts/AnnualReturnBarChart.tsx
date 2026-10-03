@@ -87,8 +87,10 @@ export function AnnualReturnBarChart({ analysis, benchmarkCurve, range }: Props)
         color: r.annual >= 0 ? ct.bull : ct.bear,
         opacity: r.partial ? 0.6 : 1,
       },
-      // 负值 bar 向左延伸，标签放左端避免与 0 轴重叠
-      label: { position: (r.annual >= 0 ? 'right' : 'left') as 'right' | 'left' },
+      // 负值 bar 向左延伸: 标签放柱内左端白字, 永不溢出进年份轴区 (柱太短由 hideOverlap 兜底)
+      label: r.annual >= 0
+        ? { position: 'right' as const, color: ct.text }
+        : { position: 'insideLeft' as const, color: '#fff' },
     }))
     const overlayData = overlay
       ? rows
@@ -100,7 +102,8 @@ export function AnnualReturnBarChart({ analysis, benchmarkCurve, range }: Props)
       : []
 
     return {
-      grid: { left: 92, right: 56, top: 20, bottom: 24 },
+      // left 留白容纳「2025 (截至10月)」长年份标签; right 容纳柱端/markLine 标签
+      grid: { left: 108, right: 64, top: 20, bottom: 24 },
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
