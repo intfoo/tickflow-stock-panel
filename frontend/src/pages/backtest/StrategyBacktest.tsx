@@ -34,6 +34,7 @@ import { StrategyNavChart } from './charts/StrategyNavChart'
 import { ReturnDistributionChart } from './charts/ReturnDistributionChart'
 import { MonthlyReturnHeatmap } from './charts/MonthlyReturnHeatmap'
 import { AnnualReturnBarChart } from './charts/AnnualReturnBarChart'
+import { SymbolContributionCard } from './charts/SymbolContributionCard'
 import { analyzeReturns } from './returnsAnalysis'
 import { TradeKlineModal, type TradeNavSource } from './components/TradeKlineModal'
 import { PicksSymbolKlineModal } from './components/PicksSymbolKlineModal'
@@ -2824,6 +2825,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                         end: String(result.config?.end ?? '').slice(0, 10),
                       }}
                     />
+                    <SymbolContributionCard trades={result.trades} />
                   </div>
                 )}
               </div>
