@@ -4,7 +4,9 @@ import {
   analyzeContribution,
   buildTreemapTiles,
   buildYearlyRows,
-  fmtContrib,
+  fmtAmount,
+  fmtReturnContrib,
+  fmtShare,
   OTHER_KEY,
 } from './contributionAnalysis'
 
@@ -80,15 +82,15 @@ describe('analyzeContribution', () => {
 })
 
 describe('buildYearlyRows', () => {
-  it('topN 外标的合并「其他」(净额求和), 其他段垫底', () => {
+  it('topN 外标的合并「其他」(净额求和), 按 |pnl| 插入正负组排名位置', () => {
     const a = analyzeContribution(SAMPLE)!
     const rows = buildYearlyRows(a, 2) // top: B, A
     const y2024 = rows[0]
     expect(y2024.segs.map(s => s.key)).toEqual(['B', 'A'])
     const y2025 = rows[1]
-    // C、D 并入其他: 1000+500 = 1500
-    expect(y2025.segs.map(s => s.key)).toEqual(['A', OTHER_KEY])
-    const other = y2025.segs[1]
+    // C、D 并入其他: +1500, 正贡献组仅它一个 → 排在负贡献 A 之前 (正组在前)
+    expect(y2025.segs.map(s => s.key)).toEqual([OTHER_KEY, 'A'])
+    const other = y2025.segs[0]
     expect(other.pnl).toBe(1500)
     expect(other.share).toBeCloseTo(1500 / 4500, 10)
   })
@@ -125,15 +127,44 @@ describe('buildTreemapTiles', () => {
   })
 })
 
-describe('fmtContrib', () => {
-  it('金额: 万元一位小数, 正数不带符号', () => {
-    expect(fmtContrib(12_500, 'amount', 100_000)).toBe('1.3万')
-    expect(fmtContrib(-20_000, 'amount', 100_000)).toBe('-2.0万')
+describe('buildYearlyRows spanYears', () => {
+  it('无交易年份补空行 (totalAbs=0, segs=[])', () => {
+    const a = analyzeContribution([
+      trade('A', '2024-03-10', 2000, '甲'),
+      trade('A', '2026-05-10', 1000, '甲'),
+    ])!
+    const rows = buildYearlyRows(a, 10, [2024, 2025, 2026])
+    expect(rows.map(r => r.year)).toEqual([2024, 2025, 2026])
+    expect(rows[1]).toMatchObject({ totalAbs: 0, segs: [] })
+    expect(rows[0].segs[0].pnl).toBe(2000)
+    expect(rows[2].segs[0].pnl).toBe(1000)
   })
 
-  it('贡献率: 带符号百分数, 分母为 0 返回 —', () => {
-    expect(fmtContrib(2000, 'share', 10_000)).toBe('20.0%')
-    expect(fmtContrib(-3000, 'share', 10_000)).toBe('-30.0%')
-    expect(fmtContrib(1, 'share', 0)).toBe('—')
+  it('不传 spanYears 时只含有交易的年份', () => {
+    const a = analyzeContribution([
+      trade('A', '2024-03-10', 2000, '甲'),
+      trade('A', '2026-05-10', 1000, '甲'),
+    ])!
+    expect(buildYearlyRows(a, 10).map(r => r.year)).toEqual([2024, 2026])
+  })
+})
+
+describe('fmtAmount / fmtReturnContrib / fmtShare', () => {
+  it('金额: 万元一位小数, 正数不带符号', () => {
+    expect(fmtAmount(12_500)).toBe('1.3万')
+    expect(fmtAmount(-20_000)).toBe('-2.0万')
+  })
+
+  it('贡献收益率: 盈亏 ÷ 初始资金 pp, 带符号; 资金非法返回 —', () => {
+    expect(fmtReturnContrib(2000, 100_000)).toBe('2.0%')
+    expect(fmtReturnContrib(-3000, 100_000)).toBe('-3.0%')
+    expect(fmtReturnContrib(1, 0)).toBe('—')
+    expect(fmtReturnContrib(1, NaN)).toBe('—')
+  })
+
+  it('贡献占比: 盈亏 ÷ Σ|盈亏|, 带符号; 分母为 0 返回 —', () => {
+    expect(fmtShare(2000, 10_000)).toBe('20.0%')
+    expect(fmtShare(-3000, 10_000)).toBe('-30.0%')
+    expect(fmtShare(1, 0)).toBe('—')
   })
 })

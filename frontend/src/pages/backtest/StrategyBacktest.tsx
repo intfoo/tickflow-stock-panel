@@ -2825,7 +2825,11 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                         end: String(result.config?.end ?? '').slice(0, 10),
                       }}
                     />
-                    <SymbolContributionCard trades={result.trades} />
+                    <SymbolContributionCard
+                      trades={result.trades}
+                      initialCapital={Number(result.config?.initial_capital)}
+                      spanYears={returnsAnalysis.years.map(y => y.year)}
+                    />
                   </div>
                 )}
               </div>

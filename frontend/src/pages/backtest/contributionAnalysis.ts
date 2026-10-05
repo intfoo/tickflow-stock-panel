@@ -9,7 +9,8 @@
 
 import type { StrategyBacktestTrade } from '@/lib/api'
 
-export type ContribMetric = 'amount' | 'share'
+/** 读数模式: return = 贡献收益率 (盈亏 ÷ 初始资金, pp); amount = 贡献收益金额 (万元) */
+export type ContribMetric = 'return' | 'amount'
 
 export const OTHER_KEY = '__other__'
 
@@ -64,9 +65,19 @@ export interface TreemapTile {
   share: number
 }
 
-/** 贡献读数格式化: 金额万 / 贡献率%; 正数不带符号 (与收益分析页约定一致)。 */
-export function fmtContrib(pnl: number, metric: ContribMetric, totalAbs: number): string {
-  if (metric === 'amount') return `${(pnl / 1e4).toFixed(1)}万`
+/** 金额读数: 万元一位小数, 正数不带符号 (与收益分析页约定一致)。 */
+export function fmtAmount(pnl: number): string {
+  return `${(pnl / 1e4).toFixed(1)}万`
+}
+
+/** 贡献收益率读数: 盈亏 ÷ 初始资金 (pp), 带符号一位小数; 资金非法返回 —。 */
+export function fmtReturnContrib(pnl: number, capital: number): string {
+  if (!Number.isFinite(capital) || capital <= 0) return '—'
+  return `${((pnl / capital) * 100).toFixed(1)}%`
+}
+
+/** 贡献占比读数: 盈亏 ÷ Σ|盈亏| (面积/宽度分配的展示值), 带符号一位小数。 */
+export function fmtShare(pnl: number, totalAbs: number): string {
   if (totalAbs <= 0) return '—'
   return `${((pnl / totalAbs) * 100).toFixed(1)}%`
 }
@@ -126,11 +137,13 @@ export function analyzeContribution(trades: StrategyBacktestTrade[]): Contributi
 
 /**
  * 模式一(按年度)行数据: 全期 |pnl| 总榜 topN 保持独立段, 其余合并为「其他」
- * (净额求和, 段序保持: 正贡献降序 → 负贡献降序 → 其他垫底)。
+ * (净额求和)。段序: 正贡献降序 → 负贡献(|pnl|)降序; 「其他」按符号归入对应组
+ * 并按 |pnl| 参与排名 (不垫底)。
+ * spanYears 传入回测覆盖的完整年份序列时, 无交易的年份补空行 (totalAbs=0)。
  */
-export function buildYearlyRows(a: ContributionAnalysis, topN: number): YearlyRow[] {
+export function buildYearlyRows(a: ContributionAnalysis, topN: number, spanYears?: number[]): YearlyRow[] {
   const topKeys = new Set(a.symbols.slice(0, Math.max(topN, 0)).map(s => s.symbol))
-  return a.years.map(y => {
+  const rows = a.years.map(y => {
     const segs: YearRowSeg[] = []
     let restPnl = 0
     for (const s of y.segs) {
@@ -141,15 +154,28 @@ export function buildYearlyRows(a: ContributionAnalysis, topN: number): YearlyRo
       }
     }
     if (restPnl !== 0) {
-      segs.push({
+      // 「其他」按符号归入正/负贡献组, 并按 |pnl| 插入对应组的排名位置 (不垫底)
+      const other: YearRowSeg = {
         key: OTHER_KEY,
         name: '其他',
         pnl: restPnl,
         share: y.totalAbs > 0 ? Math.abs(restPnl) / y.totalAbs : 0,
-      })
+      }
+      const pos = segs.filter(s => s.pnl > 0)
+      const neg = segs.filter(s => s.pnl < 0)
+      const group = restPnl > 0 ? pos : neg
+      const idx = group.findIndex(s => Math.abs(s.pnl) < Math.abs(restPnl))
+      group.splice(idx === -1 ? group.length : idx, 0, other)
+      segs.length = 0
+      segs.push(...pos, ...neg)
     }
     return { year: y.year, totalAbs: y.totalAbs, segs }
   })
+  if (!spanYears?.length) return rows
+  const byYear = new Map(rows.map(r => [r.year, r]))
+  return [...spanYears]
+    .sort((x, z) => x - z)
+    .map(y => byYear.get(y) ?? { year: y, totalAbs: 0, segs: [] })
 }
 
 /** 模式二(按标的)treemap 块: 全期 |pnl| 总榜 topN + 「其他」(净额求和)。 */
