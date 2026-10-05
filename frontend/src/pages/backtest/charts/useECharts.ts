@@ -8,11 +8,15 @@ import type { ECharts, EChartsOption } from 'echarts'
  *
  * 可传入一个外部 ref (containerRef) 让调用方共享同一 DOM 节点,
  * 用于在 setOption 前读取图表状态 (例如保留 dataZoom 缩放窗口)。
+ *
+ * devicePixelRatio: 超采样渲染 (如 max(dpr, 2)) 可显著改善 canvas 小字模糊 —
+ * 默认 window.devicePixelRatio, Windows 125%/150% 缩放下文字无亚像素渲染发虚。
  */
 export function useECharts(
   option: EChartsOption | null,
   deps: any[] = [],
   containerRef?: React.RefObject<HTMLDivElement>,
+  devicePixelRatio?: number,
 ) {
   const ownRef = useRef<HTMLDivElement>(null)
   const chartRef = containerRef ?? ownRef
@@ -22,7 +26,7 @@ export function useECharts(
   useEffect(() => {
     if (!chartRef.current) return
     const container = chartRef.current
-    instanceRef.current = echarts.init(container, undefined, { renderer: 'canvas' })
+    instanceRef.current = echarts.init(container, undefined, { renderer: 'canvas', devicePixelRatio })
     const resizeObserver = new ResizeObserver(() => instanceRef.current?.resize())
     resizeObserver.observe(container)
 

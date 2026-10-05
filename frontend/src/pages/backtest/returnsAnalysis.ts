@@ -77,6 +77,40 @@ export function sliceCurveFrom(
   return { curve: kept, baseline }
 }
 
+/**
+ * 各年「年初资产」映射: 首年 = initial_capital（缺省退化为曲线首个有效点），
+ * 其余年份 = 前一年最后一个有效点的资产。
+ * 用途: 年度贡献收益率的分母 — 市值口径下 Σ标的贡献 = 权益年度变动（恒等），
+ * 除以当年年初资产后各段收益率之和即 analyzeReturns 的年度收益。
+ */
+export function yearStartEquity(
+  equityCurve: EquityPoint[],
+  initialCapital?: number | null,
+): Map<number, number> {
+  const pts = equityCurve
+    .map(p => ({ date: String(p.date).slice(0, 10), value: Number(p.value) }))
+    .filter(p => /^\d{4}-\d{2}-\d{2}$/.test(p.date) && Number.isFinite(p.value) && p.value > 0)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  const result = new Map<number, number>()
+  if (pts.length === 0) return result
+  const baseline =
+    initialCapital != null && Number.isFinite(initialCapital) && initialCapital > 0
+      ? Number(initialCapital)
+      : pts[0].value
+  let prev = baseline
+  let curYear = Number(pts[0].date.slice(0, 4))
+  result.set(curYear, prev)
+  for (const p of pts) {
+    const y = Number(p.date.slice(0, 4))
+    if (y !== curYear) {
+      result.set(y, prev)
+      curYear = y
+    }
+    prev = p.value
+  }
+  return result
+}
+
 export function analyzeReturns(
   equityCurve: EquityPoint[],
   initialCapital?: number | null,

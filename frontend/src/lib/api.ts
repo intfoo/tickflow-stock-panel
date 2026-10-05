@@ -1834,6 +1834,8 @@ export interface StrategyBacktestResult {
     best: number
     worst: number
   }[]
+  /** 标的市值贡献 (仓位模拟路径): 逐日市值变动归集到 (symbol, year), 与净值曲线严格对账 */
+  symbol_contributions?: { symbol: string; name?: string; year: number; pnl: number }[]
   strategy_info: {
     id: string
     name: string

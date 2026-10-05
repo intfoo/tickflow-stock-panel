@@ -35,7 +35,7 @@ import { ReturnDistributionChart } from './charts/ReturnDistributionChart'
 import { MonthlyReturnHeatmap } from './charts/MonthlyReturnHeatmap'
 import { AnnualReturnBarChart } from './charts/AnnualReturnBarChart'
 import { SymbolContributionCard } from './charts/SymbolContributionCard'
-import { analyzeReturns } from './returnsAnalysis'
+import { analyzeReturns, yearStartEquity } from './returnsAnalysis'
 import { TradeKlineModal, type TradeNavSource } from './components/TradeKlineModal'
 import { PicksSymbolKlineModal } from './components/PicksSymbolKlineModal'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
@@ -1471,6 +1471,16 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
     return analyzeReturns(result.equity_curve, Number.isFinite(capital) && capital > 0 ? capital : null)
   }, [result])
 
+  // 标的贡献卡「按年度」收益率读数分母: 各年年初资产 (与 returnsAnalysis 同基准,
+  // 使 Σ段收益率 = 该年年度收益)
+  const contribYearStart = useMemo(() => {
+    if (!result || result.equity_curve.length === 0) return undefined
+    const capital = result.stats?.full_kind === 'candidate_execution'
+      ? 1.0
+      : Number(result.config?.initial_capital)
+    return yearStartEquity(result.equity_curve, Number.isFinite(capital) && capital > 0 ? capital : null)
+  }, [result])
+
   // 结果区 tab 可见性: 交易类 tab 沿用原有条件; 收益分析只看净值曲线,
   // 覆盖 0 交易（如纯买入持有）场景 — 此时有效 tab 回退到收益分析。
   const attributionCount = result?.factor_attribution?.factors.length ?? 0
@@ -2827,7 +2837,9 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                     />
                     <SymbolContributionCard
                       trades={result.trades}
+                      contributions={result.symbol_contributions}
                       initialCapital={Number(result.config?.initial_capital)}
+                      yearStartEquity={contribYearStart}
                       spanYears={returnsAnalysis.years.map(y => y.year)}
                     />
                   </div>

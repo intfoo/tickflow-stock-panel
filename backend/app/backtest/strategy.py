@@ -623,6 +623,8 @@ class StrategyBacktestResult:
     benchmark_curve: list[dict] = field(default_factory=list)
     trades: list[dict] = field(default_factory=list)
     per_symbol_stats: list[dict] = field(default_factory=list)
+    # 标的市值贡献 [{symbol, name, year, pnl}] (仓位模拟路径; 与净值曲线严格对账)
+    symbol_contributions: list[dict] = field(default_factory=list)
     strategy_info: dict = field(default_factory=dict)
     factor_attribution: dict | None = None
     elapsed_ms: float = 0.0
@@ -1778,6 +1780,7 @@ class StrategyBacktestService:
                 if result_policy.include_per_symbol_stats
                 else []
             ),
+            symbol_contributions=result.symbol_contributions,
             strategy_info=strategy_info,
             factor_attribution=factor_attribution,
             elapsed_ms=round(elapsed, 1),
@@ -2073,6 +2076,7 @@ class StrategyBacktestService:
                 if result_policy.include_per_symbol_stats
                 else []
             ),
+            symbol_contributions=result.symbol_contributions,
             strategy_info=strategy_info,
             elapsed_ms=round(elapsed, 1),
         )

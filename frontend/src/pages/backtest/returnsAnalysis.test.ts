@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeReturns, fmtRet, sliceCurveFrom, type EquityPoint } from './returnsAnalysis'
+import { analyzeReturns, fmtRet, sliceCurveFrom, yearStartEquity, type EquityPoint } from './returnsAnalysis'
 
 /** 造月末资产序列：[date, value] 对，date 为该月最后一个交易日。 */
 function curve(...points: [string, number][]): EquityPoint[] {
@@ -172,6 +172,39 @@ describe('sliceCurveFrom', () => {
     const { curve: c, baseline } = sliceCurveFrom([], '2025-01-01')
     expect(c).toEqual([])
     expect(baseline).toBeNull()
+  })
+})
+
+describe('yearStartEquity', () => {
+  it('首年 = initial_capital, 其余年份 = 前一年最后一个有效点', () => {
+    const m = yearStartEquity(
+      curve(
+        ['2024-01-02', 100_000],
+        ['2024-12-31', 110_000],
+        ['2025-06-30', 99_000],
+        ['2025-12-31', 120_000],
+      ),
+      100_000,
+    )
+    expect(m.get(2024)).toBe(100_000)
+    expect(m.get(2025)).toBe(110_000)
+    expect(m.size).toBe(2)
+  })
+
+  it('缺省 initial_capital 时首年退化为曲线首个有效点; 空曲线 → 空表', () => {
+    expect(yearStartEquity([], 100).size).toBe(0)
+    const m = yearStartEquity(curve(['2025-03-01', 50_000], ['2025-12-31', 55_000]), null)
+    expect(m.get(2025)).toBe(50_000)
+  })
+
+  it('乱序/非法点被过滤, 与 analyzeReturns 同口径', () => {
+    const m = yearStartEquity(
+      curve(['2025-12-31', 0], ['2024-12-31', 110_000], ['2024-06-28', 105_000], ['bad', 1]),
+      100_000,
+    )
+    // 2025 唯一点 value=0 非法被过滤 → 只有 2024 年
+    expect(m.get(2024)).toBe(100_000)
+    expect(m.size).toBe(1)
   })
 })
 

@@ -178,6 +178,85 @@ def test_independent_matrix_matches_legacy_candidates():
     assert matrix_result.stats["execution"] == legacy_result.stats["execution"]
 
 
+def _crow(symbol: str, d: date, price: float, **overrides) -> dict:
+    """_row 的显式日期版 (跨年场景)。"""
+    base = _row(symbol, 0, price, **overrides)
+    base["date"] = d
+    return base
+
+
+def test_symbol_contributions_reconcile_with_equity_by_year():
+    # 跨年持仓: 2023 买入后浮盈, 2024 续涨并卖出 — 贡献必须按市值变动落在对应年份,
+    # 且年度贡献合计 = 年度权益变动 (与净值曲线严格对账)。
+    panel = pl.DataFrame([
+        _crow("A", date(2023, 12, 28), 10.0, signal_entry=True),
+        _crow("A", date(2023, 12, 29), 10.5),
+        _crow("A", date(2024, 1, 2), 11.0),
+        _crow("A", date(2024, 1, 3), 12.0, signal_exit=True),
+    ]).sort(["symbol", "date"])
+    matrix = build_market_matrix(panel, panel["signal_entry"], panel["signal_exit"])
+    config = MatcherConfig(
+        matching="close_t",
+        fees_pct=0,
+        slippage_bps=0,
+        max_positions=1,
+        max_exposure_pct=1.0,
+        initial_capital=100_000,
+    )
+    engine = BacktestEngine(repo=None)  # type: ignore[arg-type]
+    result = engine.simulate_market_matrix(matrix, config)
+
+    contribs = {(c["symbol"], c["year"]): c["pnl"] for c in result.symbol_contributions}
+    # 10000 股 @10: 2023 浮盈 (10.5-10)*10000 落 2023
+    assert contribs[("A", 2023)] == pytest.approx(5_000.0, abs=0.01)
+    # 2024: (11-10.5)*10000 浮盈 + 卖出日 (12-11)*10000
+    assert contribs[("A", 2024)] == pytest.approx(15_000.0, abs=0.01)
+    # 年度对账: Σ当年贡献 = 当年权益变动 (首年对初始资金)
+    by_year: dict[int, float] = {}
+    for c in result.symbol_contributions:
+        by_year[c["year"]] = by_year.get(c["year"], 0.0) + c["pnl"]
+    year_end_equity = {int(p["date"][:4]): p["value"] for p in result.equity_curve}
+    assert by_year[2023] == pytest.approx(year_end_equity[2023] - 100_000, abs=0.01)
+    assert by_year[2024] == pytest.approx(year_end_equity[2024] - year_end_equity[2023], abs=0.01)
+    # 总量对账: Σ贡献 = 最终权益 - 初始资金 = 该标的交易已实现盈亏
+    total = sum(c["pnl"] for c in result.symbol_contributions)
+    assert total == pytest.approx(year_end_equity[2024] - 100_000, abs=0.01)
+    assert total == pytest.approx(result.trades[0].pnl_amount, abs=0.01)
+
+
+def test_symbol_contributions_include_fees():
+    # 无价格波动时贡献全部为费用: 买入日 -买入费, 卖出日 -卖出费, 总量仍对账。
+    panel = pl.DataFrame([
+        _crow("A", date(2024, 1, 1), 10.0, signal_entry=True),
+        _crow("A", date(2024, 1, 2), 10.0, signal_exit=True),
+    ]).sort(["symbol", "date"])
+    matrix = build_market_matrix(panel, panel["signal_entry"], panel["signal_exit"])
+    config = MatcherConfig(
+        matching="close_t",
+        fees_pct=0.002,
+        slippage_bps=0,
+        max_positions=1,
+        max_exposure_pct=1.0,
+        initial_capital=100_000,
+    )
+    engine = BacktestEngine(repo=None)  # type: ignore[arg-type]
+    result = engine.simulate_market_matrix(matrix, config)
+
+    # 买卖同日历年 → 聚合为一行, 数值 = -(买入费 + 卖出费) (价格无波动, 贡献全为费用)
+    assert len(result.symbol_contributions) == 1
+    entry = result.symbol_contributions[0]
+    assert entry["pnl"] < 0
+    trade = result.trades[0]
+    expected_fees = -(trade.entry_value - trade.shares * trade.entry_price) - (
+        trade.shares * trade.exit_price - trade.exit_value
+    )
+    assert entry["pnl"] == pytest.approx(expected_fees, abs=0.01)
+    total = entry["pnl"]
+    final_equity = result.equity_curve[-1]["value"]
+    assert total == pytest.approx(final_equity - 100_000, abs=0.01)
+    assert total == pytest.approx(result.trades[0].pnl_amount, abs=0.01)
+
+
 def test_lightweight_portfolio_keeps_stats_without_curves_or_monte_carlo(monkeypatch):
     panel = pl.DataFrame([
         _row("A", 0, 10, signal_entry=True),

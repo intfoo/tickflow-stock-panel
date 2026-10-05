@@ -10,7 +10,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal
 
@@ -131,6 +131,9 @@ class SimResult:
     trades: list[TradeRecord]
     per_symbol_stats: list[dict]
     stats: dict
+    # 标的市值贡献 [{symbol, name, year, pnl}]: 逐日按 (持仓市值变动 - 当日净投入) 归集,
+    # 恒有 Σsymbol(当年 pnl) = 当年权益变动 (与净值曲线严格对账, 含未实现浮动)。
+    symbol_contributions: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1772,6 +1775,12 @@ class BacktestEngine:
         max_exposure_pct = min(max(float(config.max_exposure_pct), 0.0), 1.0)
         positions: dict[int, dict] = {}
         last_close = np.full(asset_count, np.nan, dtype=np.float64)
+        # 标的市值贡献归因: contribution_i(d) = mv_i(d) - mv_i(d-1) - 当日净投入_i(d)
+        # (净投入 = 买入含费流出 - 卖出净得流入), 恒有 Σ_i contribution_i(d) = equity(d) - equity(d-1)。
+        contrib_by_symbol_year: dict[str, dict[int, float]] = {}
+        prev_market_values: dict[int, float] = {}
+        day_invest: dict[int, float] = {}
+        name_by_symbol = dict(zip(matrix.symbols, matrix.names))
         trades: list[TradeRecord] = []
         equity_curve: list[dict] = []
         drawdown_curve: list[dict] = []
@@ -1919,6 +1928,7 @@ class BacktestEngine:
             )
             exit_value = pos["shares"] * exit_price * (1 - sell_cost_pct)
             cash += exit_value
+            day_invest[asset_id] = day_invest.get(asset_id, 0.0) - exit_value
             pnl_amount = exit_value - pos["entry_value"]
             pnl_pct = pnl_amount / pos["entry_value"] if pos["entry_value"] > 0 else 0.0
             sold_today.add(asset_id)
@@ -2004,6 +2014,7 @@ class BacktestEngine:
                         pass
 
             sold_today: set[int] = set()
+            day_invest.clear()
             for pos in positions.values():
                 pos["hold_days"] += 1
 
@@ -2131,6 +2142,7 @@ class BacktestEngine:
                                 _count("buy_exposure")
                                 continue
                             cash -= entry_value
+                            day_invest[asset_id] = day_invest.get(asset_id, 0.0) + entry_value
                             positions[asset_id] = {
                                 "entry_date": date_text,
                                 "entry_signal_date": _signal_date(
@@ -2160,6 +2172,26 @@ class BacktestEngine:
                     pos["max_high"] = max(float(pos["max_high"]), high_price)
             valid_closes = np.isfinite(matrix.close[time_id]) & (matrix.close[time_id] > 0)
             last_close[valid_closes] = matrix.close[time_id, valid_closes]
+
+            # 收盘归因: mark 兜底口径与 _market_value 一致 (无效收盘用 entry_price)
+            contrib_year = int(date_text[:4])
+            for asset in set(positions) | set(prev_market_values):
+                pos = positions.get(asset)
+                if pos is not None:
+                    mark = last_close[asset]
+                    if not _valid_price(mark):
+                        mark = pos["entry_price"]
+                    mv = float(pos["shares"]) * float(mark)
+                else:
+                    mv = 0.0
+                delta = mv - prev_market_values.get(asset, 0.0) - day_invest.get(asset, 0.0)
+                if abs(delta) > 1e-9:
+                    per_year = contrib_by_symbol_year.setdefault(matrix.symbols[asset], {})
+                    per_year[contrib_year] = per_year.get(contrib_year, 0.0) + delta
+                if mv > 0.0:
+                    prev_market_values[asset] = mv
+                else:
+                    prev_market_values.pop(asset, None)
 
             market_value = _market_value()
             equity = cash + market_value
@@ -2199,6 +2231,17 @@ class BacktestEngine:
         stats["pending_exit_positions"] = sum(1 for pos in positions.values() if pos.get("pending_exit_reason"))
         stats["market_matrix_shape"] = [time_count, asset_count]
         stats["market_matrix_bytes"] = matrix.nbytes
+        symbol_contributions = [
+            {
+                "symbol": symbol,
+                "name": name_by_symbol.get(symbol, ""),
+                "year": year,
+                # float() 转换: delta 经 numpy 标量传播为 np.float64, JSON 序列化不接受
+                "pnl": round(float(pnl), 2),
+            }
+            for symbol, per_year in contrib_by_symbol_year.items()
+            for year, pnl in sorted(per_year.items())
+        ]
         return SimResult(
             equity_curve=equity_curve if options.include_curves else [],
             drawdown_curve=drawdown_curve if options.include_curves else [],
@@ -2209,6 +2252,7 @@ class BacktestEngine:
                 else []
             ),
             stats=stats,
+            symbol_contributions=symbol_contributions,
         )
 
     def simulate_portfolio_legacy(
