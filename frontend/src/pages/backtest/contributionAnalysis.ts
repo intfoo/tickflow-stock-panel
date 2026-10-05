@@ -30,7 +30,7 @@ export interface YearSeg extends SymbolPnl {
 export interface YearContribution {
   year: number
   totalAbs: number
-  /** 正贡献按 pnl 降序在前, 负贡献按 |pnl| 降序在后 */
+  /** 按 |pnl| 降序 (不分正负; 堆叠时正负各自从 0 轴向外递减) */
   segs: YearSeg[]
 }
 
@@ -121,15 +121,15 @@ export function analyzeContribution(trades: StrategyBacktestTrade[]): Contributi
       const all = [...m.values()]
       const totalAbsY = all.reduce((s, x) => s + Math.abs(x.pnl), 0)
       const nonzero = all.filter(s => s.pnl !== 0)
-      const pos = nonzero.filter(s => s.pnl > 0).sort((a, b) => b.pnl - a.pnl)
-      const neg = nonzero.filter(s => s.pnl < 0).sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
       return {
         year,
         totalAbs: totalAbsY,
-        segs: [...pos, ...neg].map(s => ({
-          ...s,
-          share: totalAbsY > 0 ? Math.abs(s.pnl) / totalAbsY : 0,
-        })),
+        segs: nonzero
+          .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
+          .map(s => ({
+            ...s,
+            share: totalAbsY > 0 ? Math.abs(s.pnl) / totalAbsY : 0,
+          })),
       }
     })
   return { symbols, years, totalAbs }
@@ -137,8 +137,7 @@ export function analyzeContribution(trades: StrategyBacktestTrade[]): Contributi
 
 /**
  * 模式一(按年度)行数据: 全期 |pnl| 总榜 topN 保持独立段, 其余合并为「其他」
- * (净额求和)。段序: 正贡献降序 → 负贡献(|pnl|)降序; 「其他」按符号归入对应组
- * 并按 |pnl| 参与排名 (不垫底)。
+ * (净额求和)。段序按 |pnl| 降序 (不分正负), 「其他」按 |pnl| 参与排名 (不垫底)。
  * spanYears 传入回测覆盖的完整年份序列时, 无交易的年份补空行 (totalAbs=0)。
  */
 export function buildYearlyRows(a: ContributionAnalysis, topN: number, spanYears?: number[]): YearlyRow[] {
@@ -154,20 +153,15 @@ export function buildYearlyRows(a: ContributionAnalysis, topN: number, spanYears
       }
     }
     if (restPnl !== 0) {
-      // 「其他」按符号归入正/负贡献组, 并按 |pnl| 插入对应组的排名位置 (不垫底)
+      // 「其他」按 |pnl| 插入排名位置 (不垫底)
       const other: YearRowSeg = {
         key: OTHER_KEY,
         name: '其他',
         pnl: restPnl,
         share: y.totalAbs > 0 ? Math.abs(restPnl) / y.totalAbs : 0,
       }
-      const pos = segs.filter(s => s.pnl > 0)
-      const neg = segs.filter(s => s.pnl < 0)
-      const group = restPnl > 0 ? pos : neg
-      const idx = group.findIndex(s => Math.abs(s.pnl) < Math.abs(restPnl))
-      group.splice(idx === -1 ? group.length : idx, 0, other)
-      segs.length = 0
-      segs.push(...pos, ...neg)
+      const idx = segs.findIndex(s => Math.abs(s.pnl) < Math.abs(restPnl))
+      segs.splice(idx === -1 ? segs.length : idx, 0, other)
     }
     return { year: y.year, totalAbs: y.totalAbs, segs }
   })

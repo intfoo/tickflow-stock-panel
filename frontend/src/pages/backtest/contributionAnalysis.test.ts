@@ -59,7 +59,7 @@ describe('analyzeContribution', () => {
     expect(a.symbols.map(s => s.symbol)).toEqual(['B', 'A', 'C', 'D'])
   })
 
-  it('年度聚合: 按 exit 年归集, 段序 = 正贡献降序 → 负贡献(|pnl|)降序, share 按当年 Σ|pnl|', () => {
+  it('年度聚合: 按 exit 年归集, 段序 = |pnl| 降序 (不分正负), share 按当年 Σ|pnl|', () => {
     const a = analyzeContribution(SAMPLE)!
     expect(a.years.map(y => y.year)).toEqual([2024, 2025])
     const y2024 = a.years[0]
@@ -67,10 +67,10 @@ describe('analyzeContribution', () => {
     expect(y2024.segs.map(s => s.symbol)).toEqual(['B', 'A'])
     expect(y2024.segs[0].share).toBeCloseTo(0.8, 10)
     const y2025 = a.years[1]
-    // 2025: C +1000, D +500 (正贡献降序), 然后 A -3000
-    expect(y2025.segs.map(s => s.symbol)).toEqual(['C', 'D', 'A'])
+    // 2025: A -3000, C +1000, D +500 → |pnl| 降序
+    expect(y2025.segs.map(s => s.symbol)).toEqual(['A', 'C', 'D'])
     expect(y2025.totalAbs).toBe(4_500)
-    expect(y2025.segs[2].share).toBeCloseTo(3000 / 4500, 10)
+    expect(y2025.segs[0].share).toBeCloseTo(3000 / 4500, 10)
   })
 
   it('非法日期/年份的交易被跳过', () => {
@@ -88,9 +88,9 @@ describe('buildYearlyRows', () => {
     const y2024 = rows[0]
     expect(y2024.segs.map(s => s.key)).toEqual(['B', 'A'])
     const y2025 = rows[1]
-    // C、D 并入其他: +1500, 正贡献组仅它一个 → 排在负贡献 A 之前 (正组在前)
-    expect(y2025.segs.map(s => s.key)).toEqual([OTHER_KEY, 'A'])
-    const other = y2025.segs[0]
+    // A -3000 (|pnl|=3000) 在前, C、D 并入其他 +1500 在后 — 纯 |pnl| 降序
+    expect(y2025.segs.map(s => s.key)).toEqual(['A', OTHER_KEY])
+    const other = y2025.segs[1]
     expect(other.pnl).toBe(1500)
     expect(other.share).toBeCloseTo(1500 / 4500, 10)
   })
