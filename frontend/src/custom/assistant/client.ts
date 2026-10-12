@@ -62,8 +62,11 @@ export interface AssistantContext {
   symbol?: string
 }
 
+/** 部署挂载前缀（同 lib/api.ts 的 API_BASE）：Caddy 剥离前缀转发后端，浏览器侧必须拼回。 */
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
+
 async function requestJson<T>(path: string): Promise<T> {
-  const res = await fetch(path)
+  const res = await fetch(`${BASE}${path}`)
   if (!res.ok) throw new Error(`AI 助手接口请求失败: ${res.status}`)
   return res.json() as Promise<T>
 }
@@ -79,7 +82,7 @@ export function fetchAssistantSuggests(): Promise<QuickSuggest[]> {
 
 /** 动作工具确认卡回调: approve=false 拒绝执行(后端超时同样视为拒绝)。 */
 export async function decideAssistantAction(callId: string, approve: boolean): Promise<void> {
-  const res = await fetch(`${import.meta.env.BASE_URL}api/custom/assistant/actions/${callId}/decision`, {
+  const res = await fetch(`${BASE}/api/custom/assistant/actions/${callId}/decision`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ approve }),
@@ -92,7 +95,7 @@ export async function* assistantChatStream(
   body: { messages: ChatHistoryMessage[]; context?: AssistantContext },
   signal?: AbortSignal,
 ): AsyncGenerator<AssistantEvent> {
-  const res = await fetch(`${import.meta.env.BASE_URL}api/custom/assistant/chat`, {
+  const res = await fetch(`${BASE}/api/custom/assistant/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
