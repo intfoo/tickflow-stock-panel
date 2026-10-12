@@ -5,7 +5,11 @@
 
 import { toast } from '@/components/Toast'
 
-const BASE = ''
+/** 部署挂载前缀（来自 vite base，如 /tick）；根部署时为空串，行为不变。
+ *  注意：Caddy 会剥离该前缀再转发后端，所以浏览器侧发出的请求必须把它拼回去。 */
+export const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
+
+const BASE = API_BASE
 
 type RequestOptions = RequestInit & {
   /** 为 true 时不弹错误 toast（由调用方自行汇总提示，如多图串行队列） */
@@ -3564,7 +3568,7 @@ export const api = {
     content?: string
     message?: string
   }> {
-    const res = await fetch('/api/financials/analyze', {
+    const res = await fetch(`${BASE}/api/financials/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol, focus: focus ?? '' }),
@@ -3649,7 +3653,7 @@ export const api = {
     content?: string
     message?: string
   }> {
-    const res = await fetch('/api/stock-analysis/analyze', {
+    const res = await fetch(`${BASE}/api/stock-analysis/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol, focus: focus ?? '' }),
@@ -3724,7 +3728,7 @@ export const api = {
     content?: string
     message?: string
   }> {
-    const res = await fetch('/api/market-recap/analyze', {
+    const res = await fetch(`${BASE}/api/market-recap/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '' }),
@@ -3766,7 +3770,7 @@ export const api = {
     content?: string
     message?: string
   }> {
-    const res = await fetch('/api/rps/rotation-analyze', {
+    const res = await fetch(`${BASE}/api/rps/rotation-analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ days, focus: focus ?? '', kind: kind ?? 'concept', level: level ?? null }),
@@ -4055,7 +4059,7 @@ export const api = {
     ),
 
   async *strategyBuildStream(step: number, payload: Record<string, any>): AsyncGenerator<StrategyBuildStreamEvent> {
-    const res = await fetch('/api/strategies/build/stream', {
+    const res = await fetch(`${BASE}/api/strategies/build/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ step, ...payload }),

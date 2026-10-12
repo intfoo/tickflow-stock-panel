@@ -20,10 +20,12 @@ const _redirectToLogin = (() => {
     const isNotInit = msg.includes('尚未初始化访问密码') || msg.includes('NOT_INITIALIZED')
     if (!is401 && !isNotInit) return
     // 已在登录页则不跳(避免死循环)
-    if (window.location.pathname === '/login') return
+    // 线上挂在 /tick 前缀下（Caddy 剥离前缀后转发后端），路径比较与跳转都必须带前缀
+    const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+    if (window.location.pathname === `${base}/login`) return
     redirecting = true
     const redirect = encodeURIComponent(window.location.pathname + window.location.search)
-    window.location.href = `/login?redirect=${redirect}`
+    window.location.href = `${base}/login?redirect=${redirect}`
   }
 })()
 

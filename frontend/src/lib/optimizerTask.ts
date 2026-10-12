@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { API_BASE } from './api'
 
 /**
  * 参数优化任务管理 (SSE 模式 + 重连)。镜像 backtestTask, 结果为排名 dict。
@@ -200,7 +201,7 @@ function connectSSE(url: string): void {
 
 /** 调后端 cancel (按回吐的 job_key)。 */
 function postCancel(jobKey: string): void {
-  fetch('/api/backtest/optimize/cancel', {
+  fetch(`${API_BASE}/api/backtest/optimize/cancel`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ job_key: jobKey }),
@@ -247,7 +248,7 @@ export function startOptimize(params: StartOptimizeParams): void {
   })
 
   localStorage.setItem(RECONNECT_KEY, qs)
-  connectSSE(`/api/backtest/optimize/stream?${qs}`)
+  connectSSE(`${API_BASE}/api/backtest/optimize/stream?${qs}`)
 }
 
 export function stopOptimize(): void {
@@ -291,7 +292,7 @@ export function tryReconnectOptimize(): boolean {
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null }
   emit()
-  connectSSE(`/api/backtest/optimize/stream?${qs}`)
+  connectSSE(`${API_BASE}/api/backtest/optimize/stream?${qs}`)
   return true
 }
 

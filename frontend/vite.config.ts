@@ -7,7 +7,10 @@ const proxyHost = ['0.0.0.0', '::'].includes(backendHost) ? '127.0.0.1' : backen
 const backendPort = process.env.BACKEND_PORT || '3018'
 const backendTarget = `http://${proxyHost}:${backendPort}`
 
-export default defineConfig({
+// 线上由 Caddy 以 /tick 前缀反代（handle_path 剥离前缀后转发后端），
+// 打包出的静态资源必须带该前缀；本地 dev 仍走根路径，不改变既有开发方式。
+export default defineConfig(({ mode }) => ({
+  base: mode === 'production' ? '/tick/' : '/',
   plugins: [react()],
   resolve: {
     alias: {
@@ -51,4 +54,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

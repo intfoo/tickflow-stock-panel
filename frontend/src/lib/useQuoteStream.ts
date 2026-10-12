@@ -6,7 +6,7 @@ import { getQueryConfig } from './useQueryConfig'
 import { toast } from '@/components/Toast'
 import { pushAlertToasts } from '@/components/AlertToast'
 import { feedReviewEvent } from './reviewStore'
-import type { KlineDailyResponse, StrategyAlertEvent } from './api'
+import { API_BASE, type KlineDailyResponse, StrategyAlertEvent } from './api'
 
 // ===== 全局 SSE 连接状态 (模块级 store, 仿 AlertToast.tsx 模式) =====
 // 实时行情 SSE 断开时 UI 无感知 → 会漏掉策略告警。这里暴露连接状态,
@@ -116,7 +116,7 @@ export function useQuoteStream(
 
     const connect = () => {
       _setStatus(failCount > 0 ? 'reconnecting' : _streamStatus)
-      const es = new EventSource('/api/intraday/stream')
+      const es = new EventSource(`${API_BASE}/api/intraday/stream`)
       esRef.current = es
 
       es.onopen = () => {

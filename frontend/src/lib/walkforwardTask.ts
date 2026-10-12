@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { API_BASE } from './api'
 
 /** Walk-forward 任务管理 (SSE + job_key 回吐 + 重连)。镜像 optimizerTask。 */
 
@@ -191,7 +192,7 @@ function connectSSE(url: string): void {
 
 /** 调后端 cancel (按回吐的 job_key)。 */
 function postCancel(jobKey: string): void {
-  fetch('/api/backtest/walkforward/cancel', {
+  fetch(`${API_BASE}/api/backtest/walkforward/cancel`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ job_key: jobKey }),
@@ -228,7 +229,7 @@ export function startWalkForward(params: StartWalkForwardParams): void {
   })
 
   localStorage.setItem(RECONNECT_KEY, qs)
-  connectSSE(`/api/backtest/walkforward/stream?${qs}`)
+  connectSSE(`${API_BASE}/api/backtest/walkforward/stream?${qs}`)
 }
 
 export function stopWalkForward(): void {
@@ -270,7 +271,7 @@ export function tryReconnectWalkForward(): boolean {
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null }
   emit()
-  connectSSE(`/api/backtest/walkforward/stream?${qs}`)
+  connectSSE(`${API_BASE}/api/backtest/walkforward/stream?${qs}`)
   return true
 }
 

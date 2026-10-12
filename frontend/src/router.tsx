@@ -171,4 +171,8 @@ export const router = createBrowserRouter([
       }),
     ],
   },
-])
+], {
+  // 线上挂在 /tick 前缀下（Caddy 剥离前缀后转发后端），路由跳转必须带上前缀，
+  // 否则跳出去的路径不带前缀会被 Caddy 判为 404。根部署时为空串，行为不变。
+  basename: import.meta.env.BASE_URL.replace(/\/$/, '') || undefined,
+})

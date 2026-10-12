@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { StrategyBacktestResult } from './api'
+import { API_BASE, type StrategyBacktestResult } from './api'
 
 /**
  * 全局回测任务管理 (SSE 模式 + 任务缓存 + 重连支持)。
@@ -241,7 +241,7 @@ export function startBacktest(params: {
   // 存 reconnect 信息 (刷新后用)
   localStorage.setItem(RECONNECT_KEY, qs)
 
-  connectSSE(`/api/backtest/strategy/stream?${qs}`)
+  connectSSE(`${API_BASE}/api/backtest/strategy/stream?${qs}`)
 }
 
 /** 停止当前回测任务 (调后端 cancel, 后端 cancel_event → 停止计算) */
@@ -256,7 +256,7 @@ export async function stopBacktest(): Promise<void> {
       // 替代: 前端直接关闭 SSE 连接 + 调一个带参数的 cancel 接口。
       // 简化: 关闭连接即可, 后端检测断开后 (不取消)。需要 cancel 用 POST。
       // 这里用 cancel 接口: POST /strategy/cancel, body 带 qs 的参数。
-      await fetch('/api/backtest/strategy/cancel', {
+      await fetch(`${API_BASE}/api/backtest/strategy/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ qs }),
@@ -288,7 +288,7 @@ export function tryReconnect(): boolean {
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false }
   emit()
-  connectSSE(`/api/backtest/strategy/stream?${qs}`)
+  connectSSE(`${API_BASE}/api/backtest/strategy/stream?${qs}`)
   return true
 }
 

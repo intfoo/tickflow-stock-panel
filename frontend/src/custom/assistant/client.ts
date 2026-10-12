@@ -79,7 +79,7 @@ export function fetchAssistantSuggests(): Promise<QuickSuggest[]> {
 
 /** 动作工具确认卡回调: approve=false 拒绝执行(后端超时同样视为拒绝)。 */
 export async function decideAssistantAction(callId: string, approve: boolean): Promise<void> {
-  const res = await fetch(`/api/custom/assistant/actions/${callId}/decision`, {
+  const res = await fetch(`${import.meta.env.BASE_URL}api/custom/assistant/actions/${callId}/decision`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ approve }),
@@ -92,7 +92,7 @@ export async function* assistantChatStream(
   body: { messages: ChatHistoryMessage[]; context?: AssistantContext },
   signal?: AbortSignal,
 ): AsyncGenerator<AssistantEvent> {
-  const res = await fetch('/api/custom/assistant/chat', {
+  const res = await fetch(`${import.meta.env.BASE_URL}api/custom/assistant/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
