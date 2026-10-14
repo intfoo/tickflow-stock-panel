@@ -66,7 +66,7 @@ def test_extend_history_stock_unchanged(monkeypatch, tmp_path):
         return 100
 
     # —— mock _resolve_universe ——
-    monkeypatch.setattr(extend_history, "_resolve_universe", lambda capset: ["600519.SH"])
+    monkeypatch.setattr(extend_history, "_resolve_universe", lambda capset, repo: ["600519.SH"])
 
     # —— mock kline_sync ——
     monkeypatch.setattr(
@@ -345,7 +345,7 @@ def test_sync_etf_daily_chunked_enriched(monkeypatch):
         append_etf_enriched=lambda df: appended.__setitem__("enriched", df.height),
         refresh_index_views=lambda: None,
     )
-    capset = types.SimpleNamespace(has=lambda cap: False)
+    capset = types.SimpleNamespace(has=lambda cap: True)
 
     # 自定义源成功返回全量 df
     monkeypatch.setattr(kline_sync, "_try_custom_daily", lambda *a, **k: (df_custom, False))

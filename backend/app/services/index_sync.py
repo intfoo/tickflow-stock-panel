@@ -205,6 +205,7 @@ def sync_and_persist_index_daily(
     on_chunk_done(current, total) 每个批次完成后回调。
     """
     if not capset.has(Cap.KLINE_DAILY_BATCH):
+        kline_sync._log_cap_unavailable("daily", "指数/ETF 日K同步")
         return 0
 
     if symbols_override:
@@ -442,6 +443,10 @@ def sync_and_persist_etf_daily(
     """同步 ETF 日K到独立 kline_etf_* parquet,并计算 ETF enriched。
     on_chunk_done(current, total) 每个批次完成后回调。
     """
+    if not capset.has(Cap.KLINE_DAILY_BATCH):
+        kline_sync._log_cap_unavailable("daily", "ETF 日K同步")
+        return 0
+
     if symbols_override:
         symbols = sorted(set(s for s in symbols_override if s))
     else:
@@ -482,10 +487,7 @@ def sync_and_persist_etf_daily(
             repo.append_etf_enriched(enriched)
         repo.refresh_index_views()
         return df_custom.height
-    # 自定义源未配 / 异常 → fall through 到 TickFlow
-
-    if not capset.has(Cap.KLINE_DAILY_BATCH):
-        return 0
+    # 自定义源未配 / 异常 → fall through 到 TickFlow (KLINE_DAILY_BATCH 守卫在函数开头)
 
     limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH)
     batch_size = min_batch(preferences.get_index_daily_batch_size(), limit)

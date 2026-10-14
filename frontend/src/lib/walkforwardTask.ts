@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { API_BASE } from './api'
+import { fetchRunningTask, reportTaskFinished, reportTaskRunning } from './taskRegistry'
 
 /** Walk-forward 任务管理 (SSE + job_key 回吐 + 重连)。镜像 optimizerTask。 */
 
@@ -81,6 +82,17 @@ const MAX_RECONNECT = 5
 const RECONNECT_KEY = 'walkforward_reconnect'
 const JOB_KEY_KEY = 'walkforward_job_key'
 
+// 跨设备接回: 启动上报注册表, 终态关闭; 重连/SSE/cancel 逻辑零改动。
+const TASK_KIND = 'walkforward' as const
+
+/** 终态: 关闭注册表项并清本地重连/取消键。 */
+function finishTaskRegistry() {
+  const qs = localStorage.getItem(RECONNECT_KEY)
+  if (qs) reportTaskFinished(TASK_KIND, { qs })
+  localStorage.removeItem(RECONNECT_KEY)
+  localStorage.removeItem(JOB_KEY_KEY)
+}
+
 function emit() {
   listeners.forEach(fn => fn())
 }
@@ -122,8 +134,7 @@ function connectSSE(url: string): void {
           es.close()
           eventSource = null
           currentJobKey = null
-          localStorage.removeItem(RECONNECT_KEY)
-          localStorage.removeItem(JOB_KEY_KEY)
+          finishTaskRegistry()
         }
       }
     } catch { /* ignore */ }
@@ -152,8 +163,7 @@ function connectSSE(url: string): void {
     es.close()
     eventSource = null
     currentJobKey = null
-    localStorage.removeItem(RECONNECT_KEY)
-    localStorage.removeItem(JOB_KEY_KEY)
+    finishTaskRegistry()
   })
 
   es.addEventListener('error', (e: MessageEvent) => {
@@ -170,8 +180,7 @@ function connectSSE(url: string): void {
       es.close()
       eventSource = null
       currentJobKey = null
-      localStorage.removeItem(RECONNECT_KEY)
-      localStorage.removeItem(JOB_KEY_KEY)
+      finishTaskRegistry()
       return
     }
     // 无 data: 连接异常断开。EventSource 自动重连, 设上限避免网络长断时无限 pending。
@@ -181,8 +190,7 @@ function connectSSE(url: string): void {
         es.close()
         eventSource = null
         // 清 localStorage: 否则刷新页面 tryReconnect 会重连到这个已放弃的任务。
-        localStorage.removeItem(RECONNECT_KEY)
-        localStorage.removeItem(JOB_KEY_KEY)
+        finishTaskRegistry()
         current = { ...current, isPending: false, error: '连接中断, 重连多次失败' }
         emit()
       }
@@ -229,6 +237,7 @@ export function startWalkForward(params: StartWalkForwardParams): void {
   })
 
   localStorage.setItem(RECONNECT_KEY, qs)
+  reportTaskRunning(TASK_KIND, { qs }, params.strategy_id)
   connectSSE(`${API_BASE}/api/backtest/walkforward/stream?${qs}`)
 }
 
@@ -240,8 +249,7 @@ export function stopWalkForward(): void {
     postCancel(jobKey)
     if (eventSource) { eventSource.close(); eventSource = null }
     currentJobKey = null
-    localStorage.removeItem(RECONNECT_KEY)
-    localStorage.removeItem(JOB_KEY_KEY)
+    finishTaskRegistry()
   } else if (eventSource) {
     const es = eventSource
     // job_key 始终没到手(job 事件未达): 5 秒后放弃并清 localStorage, 避免刷新重连到未取消任务。
@@ -249,8 +257,7 @@ export function stopWalkForward(): void {
     setTimeout(() => {
       if (es === eventSource) {
         es.close(); eventSource = null
-        localStorage.removeItem(RECONNECT_KEY)
-        localStorage.removeItem(JOB_KEY_KEY)
+        finishTaskRegistry()
       }
     }, 5000)
   }
@@ -265,9 +272,22 @@ export function clearWalkForward(): void {
   emit()
 }
 
+/** 换设备接回: 本地无键时从服务端注册表找 running 任务, 回填本地键并走原有重连。 */
+async function adoptFromServer() {
+  if (current && !current.error && !current.result) return // 本机已有活动任务
+  const task = await fetchRunningTask(TASK_KIND)
+  const qs = typeof task?.payload?.qs === 'string' ? task.payload.qs : ''
+  if (!qs || localStorage.getItem(RECONNECT_KEY)) return
+  localStorage.setItem(RECONNECT_KEY, qs)
+  tryReconnectWalkForward()
+}
+
 export function tryReconnectWalkForward(): boolean {
   const qs = localStorage.getItem(RECONNECT_KEY)
-  if (!qs) return false
+  if (!qs) {
+    void adoptFromServer()
+    return false
+  }
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null }
   emit()
