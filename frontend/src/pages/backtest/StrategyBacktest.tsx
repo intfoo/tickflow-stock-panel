@@ -3055,14 +3055,25 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                   actions={detail.params.length > 0 ? <span className="text-[10px] text-muted">{detail.params.length} 项</span> : undefined}
                 >
                   {detail.params.length > 0 ? (
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      {detail.params.map(param => (
-                        <StrategyParamInput
-                          key={param.id}
-                          param={param}
-                          value={strategyParams[param.id]}
-                          onChange={value => setStrategyParams(prev => ({ ...prev, [param.id]: value }))}
-                        />
+                    <div className="space-y-4">
+                      {groupParams(visibleParams(detail.params, strategyParams)).map((g, gi) => (
+                        <div key={g.name ?? `ug${gi}`}>
+                          {g.name && (
+                            <div className="mb-2 border-b border-border/40 pb-1 text-[11px] font-medium text-muted">{g.name}</div>
+                          )}
+                          {/* 命名组横排（如「入池开关 + 止盈 + 锁定」同组一行）；无名组回退网格 */}
+                          <div className={g.name ? 'flex flex-wrap items-end gap-x-4 gap-y-3' : 'grid grid-cols-1 gap-3 sm:grid-cols-2'}>
+                            {g.items.map(param => (
+                              <StrategyParamInput
+                                key={param.id}
+                                param={param}
+                                value={strategyParams[param.id]}
+                                onChange={handleStrategyParamChange}
+                                onApplyValues={values => setStrategyParams(prev => ({ ...prev, ...values }))}
+                              />
+                            ))}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   ) : (

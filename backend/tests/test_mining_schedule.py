@@ -405,7 +405,7 @@ def test_insufficient_data_records_visible_skipped_prerequisite(tmp_path, monkey
 
 def test_pipeline_failure_does_not_trigger_mining(monkeypatch):
     mining_calls = []
-    monkeypatch.setattr(daily_pipeline, "_run_tracked", lambda *_args: False)
+    monkeypatch.setattr(daily_pipeline, "_run_tracked", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         "app.services.mining_schedule.run_weekly_mining",
         lambda state: mining_calls.append(state),
@@ -417,7 +417,7 @@ def test_pipeline_failure_does_not_trigger_mining(monkeypatch):
 
 
 def test_enqueue_failure_does_not_escape_successful_pipeline(monkeypatch):
-    monkeypatch.setattr(daily_pipeline, "_run_tracked", lambda *_args: True)
+    monkeypatch.setattr(daily_pipeline, "_run_tracked", lambda *_args, **_kwargs: True)
 
     def fail_enqueue(_state):
         raise RuntimeError("queue unavailable")

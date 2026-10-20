@@ -26,6 +26,10 @@ class FakeJobStore:
         self.jobs[jid] = {"id": jid, "status": "pending", "log": [], "error": None}
         return jid, True
 
+    def get(self, jid: str) -> dict | None:
+        # run_with_capacity 会读取 job 的 timeout_s 决定排队上界
+        return self.jobs.get(jid)
+
     def start(self, jid: str) -> None:
         self.jobs[jid]["status"] = "running"
 
