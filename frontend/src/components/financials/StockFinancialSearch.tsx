@@ -80,7 +80,8 @@ export function StockFinancialSearch({ onSelect, assetTypes }: Props) {
       </div>
 
       <AnimatePresence>
-        {open && s.trimmed && (
+        {/* 防抖期间 trimmed 还是旧值/空, 用 results 兜底保持下拉连续 (与自选页一致) */}
+        {open && (s.trimmed || s.results.length > 0) && (
           <motion.div
             ref={s.listRef}
             initial={{ opacity: 0, y: -4 }}
