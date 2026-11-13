@@ -6,7 +6,7 @@
 //   - index.html 里有预渲染内联脚本, 首屏前就设好 class, 避免闪烁 (FOUC)
 //   - UI token (bg-surface/text-foreground 等) 自动跟随;
 //     图表画布不吃 CSS 变量, 统一走 useChartTheme() 取调色板
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { hydrateUiPrefs, setUiPref } from '@/lib/uiPrefs'
 import { getColorMode, useColorMode, type ColorMode, COLOR_MODES } from './colorMode'
 
@@ -166,7 +166,11 @@ export function chartTheme(theme: Theme, colorMode: ColorMode = getColorMode()):
   return theme === 'dark' ? darkTheme(colorMode) : lightTheme(colorMode)
 }
 
-/** hook: 当前主题的图表调色板 (主题切换自动触发重渲染)。 */
+/** hook: 当前主题的图表调色板 (主题/配色切换自动触发重渲染)。 */
 export function useChartTheme(): ChartTheme {
-  return chartTheme(useTheme(), useColorMode())
+  const theme = useTheme()
+  const colorMode = useColorMode()
+  // 必须记忆化: 图表组件的 option useMemo 依赖本对象, 每次渲染返回新对象会让
+  // 无关的父级重渲染 (如切换页签) 都推一次 setOption, 触发无谓重绘。
+  return useMemo(() => chartTheme(theme, colorMode), [theme, colorMode])
 }

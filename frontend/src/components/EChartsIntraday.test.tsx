@@ -11,7 +11,12 @@ const chart = vi.hoisted(() => ({
   getZr: () => ({ on: vi.fn(), off: vi.fn() }),
 }))
 vi.mock('echarts', () => ({ init: () => chart }))
-vi.mock('@/lib/theme', () => ({ useChartTheme: () => ({}) }))
+vi.mock('@/lib/theme', () => ({ useChartTheme: () => ({
+  // fork 摸鱼配色: 涨跌停虚线与成交量条按 bull/bear (+alpha) 取色
+  bull: '#C74040', bear: '#2D9B65', text: '#999', grid: '#333', border: '#444',
+  bullAlpha: (a: number) => `rgba(199,64,64,${a})`,
+  bearAlpha: (a: number) => `rgba(45,155,101,${a})`,
+}) }))
 const rows = [
   { datetime: '2026-09-09 09:30:00', open: 119.77, high: 119.77, low: 119, close: 119.1, volume: 100, amount: 1191000 },
   { datetime: '2026-09-09 11:20:00', open: 118.25, high: 118.28, low: 118.24, close: 118.25, volume: 55, amount: 650375 },

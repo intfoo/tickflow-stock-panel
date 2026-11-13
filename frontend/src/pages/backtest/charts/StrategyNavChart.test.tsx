@@ -56,7 +56,13 @@ vi.mock('lightweight-charts', () => ({
   AreaSeries: 'area', BaselineSeries: 'baseline', LineSeries: 'line',
   ColorType: { Solid: 'solid' }, CrosshairMode: { Normal: 0 }, LineStyle: { Dashed: 2 }, LineType: { WithSteps: 1 },
 }))
-vi.mock('@/lib/theme', () => ({ useChartTheme: () => ({ text: '#ccc', grid: '#333', border: '#444', crosshair: '#888', crosshairLabelBg: '#222' }) }))
+vi.mock('@/lib/theme', () => ({ useChartTheme: () => ({
+  text: '#ccc', grid: '#333', border: '#444', crosshair: '#888', crosshairLabelBg: '#222',
+  // fork 摸鱼配色: 回撤色跟随 bull/bear, 需要 alpha 变体
+  bull: '#C74040', bear: '#2D9B65',
+  bullAlpha: (a: number) => `rgba(199,64,64,${a})`,
+  bearAlpha: (a: number) => `rgba(45,155,101,${a})`,
+}) }))
 
 const mkResult = (p: Partial<StrategyBacktestResult> = {}): StrategyBacktestResult => ({
   run_id: 'r1',
