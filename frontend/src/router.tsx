@@ -132,7 +132,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Dashboard /> },
       { path: 'overview', element: <Navigate to="/" replace /> },
-      { path: 'analysis', element: <Navigate to="/settings?tab=ext-pages" replace /> },
+      { path: 'analysis', element: <Navigate to="/settings?tab=pages&section=ext-pages" replace /> },
       { path: 'analysis/:menuId', element: <AnalysisDetail /> },
       { path: 'czsc-analysis', element: <CzscAnalysis /> },
       { path: 'watchlist', element: <Watchlist /> },

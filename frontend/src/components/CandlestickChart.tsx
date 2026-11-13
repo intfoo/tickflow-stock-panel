@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 import {
   createChart,
+  CandlestickSeries,
+  HistogramSeries,
   CrosshairMode,
   type IChartApi,
   type ISeriesApi,
@@ -81,8 +83,8 @@ export function CandlestickChart({ data, height = 480 }: Props) {
       width: el.clientWidth,
       height,
       layout: {
-        // 关闭 TV 角标 (licence 归属改由 README 技术栈外链承担)
-        attributionLogo: false,
+        // 保留 TradingView 归属链接。
+        attributionLogo: true,
         background: { color: THEME.background },
         textColor: ctRef.current.text,
         fontFamily: 'JetBrains Mono, monospace',
@@ -106,7 +108,7 @@ export function CandlestickChart({ data, height = 480 }: Props) {
     })
 
     // Candlestick — occupies top 80% via default price scale
-    const candle = chart.addCandlestickSeries({
+    const candle = chart.addSeries(CandlestickSeries, {
       upColor: ctRef.current.bull,
       downColor: ctRef.current.bear,
       borderUpColor: ctRef.current.bull,
@@ -118,7 +120,7 @@ export function CandlestickChart({ data, height = 480 }: Props) {
     })
 
     // Volume — separate price scale, squeezed to bottom 20%
-    const volume = chart.addHistogramSeries({
+    const volume = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
       lastValueVisible: false,

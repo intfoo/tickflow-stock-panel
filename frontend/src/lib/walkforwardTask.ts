@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { API_BASE } from './api'
 import { fetchRunningTask, reportTaskFinished, reportTaskRunning } from './taskRegistry'
 
-/** Walk-forward 任务管理 (SSE + job_key 回吐 + 重连)。镜像 optimizerTask。 */
+/** Walk-forward 任务管理 (SSE + job_key 回吐 + 重连)。与 robustTask 同构。 */
 
 export interface WFProgress {
   type: string

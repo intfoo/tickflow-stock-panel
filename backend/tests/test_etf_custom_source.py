@@ -36,6 +36,8 @@ def test_extend_history_stock_unchanged(monkeypatch, tmp_path):
         db=mock_db,
         earliest_daily_date=lambda: earliest,
         refresh_index_views=lambda: None,
+        # 上游 0.3.x: extend_history 改用 repo.refresh_view (替代裸 db.execute)
+        refresh_view=lambda *a, **k: None,
     )
 
     # —— mock capset ——
@@ -320,52 +322,65 @@ def test_try_custom_daily_resolution_failed(monkeypatch):
 
 
 # ──────────────────────────────────────────────────────────
-# 6b. sync_and_persist_etf_daily: 自定义源大 df → enriched 分 chunk 计算
+# 6b. sync_and_persist_etf_daily: 自定义源 → enriched 用本地全历史重算
 # ──────────────────────────────────────────────────────────
 
 
-def test_sync_etf_daily_chunked_enriched(monkeypatch):
-    """自定义源返回 250 只标的大 df → compute_enriched 按 100 只/批分 3 次调用 (防全量 OOM)。"""
+def test_sync_etf_daily_enriched_from_full_local_history(monkeypatch):
+    """自定义源只返回新日数据 → enriched 必须用本地全历史重算 (拆分/除权改写历史价)。
+
+    上游 #502 起 ETF 自定义源走 _sync_custom_daily + _persist_etf_frame: 先落原始
+    日K, 再读本地全历史算 enriched。只用本次拉取窗口会被 1拆N 打穿 (历史分区停在
+    未复权价, 日K 留跳空), 所以这里是行为契约而非实现细节。
+    """
     import polars as pl
 
-    from app.services import index_sync, kline_sync
+    from app.data_providers import custom as custom_sources
+    from app.services import index_sync
 
     symbols = [f"51{i:04d}.SH" for i in range(250)]
-    dates = [date(2025, 1, 2), date(2025, 1, 3)]
-    df_custom = pl.DataFrame({
-        "symbol": [s for s in symbols for _ in dates],
-        "date": dates * len(symbols),
-        "close": [1.0] * (len(symbols) * len(dates)),
+    raw = pl.DataFrame({
+        "symbol": symbols,
+        "date": [date(2025, 1, 3)] * len(symbols),
+        "close": [1.0] * len(symbols),
+    })
+    hist_dates = [date(2025, 1, 2), date(2025, 1, 3), date(2025, 1, 6)]
+    local = pl.DataFrame({
+        "symbol": [s for s in symbols for _ in hist_dates],
+        "date": hist_dates * len(symbols),
+        "close": [1.0] * (len(symbols) * len(hist_dates)),
     })
 
     appended: dict[str, int] = {"daily": 0, "enriched": 0}
     repo = types.SimpleNamespace(
-        get_etf_instruments=lambda: pl.DataFrame({"symbol": symbols}),
         append_etf_daily=lambda df: appended.__setitem__("daily", df.height),
         append_etf_enriched=lambda df: appended.__setitem__("enriched", df.height),
         refresh_index_views=lambda: None,
     )
     capset = types.SimpleNamespace(has=lambda cap: True)
 
-    # 自定义源成功返回全量 df
-    monkeypatch.setattr(kline_sync, "_try_custom_daily", lambda *a, **k: (df_custom, False))
+    monkeypatch.setattr(index_sync.preferences, "get_daily_data_provider", lambda: "fuyao")
+    monkeypatch.setattr(custom_sources, "provider_has_dataset", lambda name, dataset: True)
+    monkeypatch.setattr(custom_sources, "get_provider", lambda name: object())
+    monkeypatch.setattr(index_sync, "_iter_custom_daily_frames", lambda *a, **k: iter([raw]))
     monkeypatch.setattr(index_sync, "_load_etf_factors", lambda repo: pl.DataFrame())
+    monkeypatch.setattr(index_sync, "_load_local_etf_daily", lambda repo, syms: local)
 
-    enrich_calls: list[int] = []
+    enrich_calls: list[tuple[int, int]] = []
 
-    def fake_compute_enriched(chunk_df, factors=None, instruments=None):
-        enrich_calls.append(chunk_df["symbol"].n_unique())
-        return chunk_df
+    def fake_compute_enriched(frame, factors=None, instruments=None):
+        enrich_calls.append((frame.height, frame["symbol"].n_unique()))
+        return frame
 
     monkeypatch.setattr(index_sync, "compute_enriched", fake_compute_enriched)
 
-    written = index_sync.sync_and_persist_etf_daily(repo, capset)
+    written = index_sync.sync_and_persist_etf_daily(repo, capset, symbols_override=symbols)
 
-    assert written == df_custom.height
-    assert enrich_calls == [100, 100, 50], \
-        f"250 只标的应分 3 批 (100/100/50) 计算 enriched, 实际: {enrich_calls}"
-    assert appended["daily"] == df_custom.height
-    assert appended["enriched"] == df_custom.height
+    assert written == len(symbols)
+    assert enrich_calls == [(len(local), len(symbols))], \
+        f"enriched 应一次性按本地全历史重算, 实际调用: {enrich_calls}"
+    assert appended["daily"] == len(symbols)
+    assert appended["enriched"] == len(local)
 
 
 # ──────────────────────────────────────────────────────────
@@ -373,24 +388,36 @@ def test_sync_etf_daily_chunked_enriched(monkeypatch):
 # ──────────────────────────────────────────────────────────
 
 
-def test_invalidate_etf_adj_factor():
-    """invalidate_data_cache("etf_adj_factor") 后 _table_cache 中对应 key 被设为 None。"""
+def test_invalidate_etf_adj_factor(monkeypatch):
+    """invalidate_data_cache("etf_adj_factor") 只标记该表过期, 不波及其它表。
+
+    上游已把裸 _table_cache 换成 DataStatusCache: 普通失效保留旧快照只把 TTL
+    清零 (下次请求先返回旧值再后台刷新), discard_stale=True 才丢弃旧值。
+    """
     from app.api import data as data_api
+    from app.services.data_status_cache import DataStatusCache
 
-    # —— 先 set 一个非 None 值 ——
-    fake_stats = {"rows": 100, "symbols_covered": 50, "trading_days": 200}
-    data_api._table_cache["etf_adj_factor"] = fake_stats
-    data_api._table_cache_ts["etf_adj_factor"] = 12345.0
+    cache = DataStatusCache({**data_api._TABLE_TTLS, "storage": 60, "last_runs": float("inf")})
+    monkeypatch.setattr(data_api, "_status_cache", cache)
 
-    # 确认 set 成功
-    assert data_api._table_cache["etf_adj_factor"] is not None
+    # 模拟一次已完成的后台刷新: 每张表都有不过期的快照
+    for key in data_api._TABLE_TTLS:
+        cache._values[key] = {"rows": 100}
+        cache._expires[key] = float("inf")
 
-    # —— 调 invalidate ——
+    loads = {name: (lambda: {"rows": 999}) for name in data_api._TABLE_TTLS}
+
+    # is_busy=True: 只读快照, 不启动后台刷新线程
     data_api.invalidate_data_cache("etf_adj_factor")
+    snap = cache.snapshot(loads, is_busy=lambda: True)
+    assert snap["stats_pending"] is True, "失效后应提示统计待刷新"
+    assert snap["etf_adj_factor"] == {"rows": 100}, "普通失效保留旧快照"
+    assert snap["daily"] == {"rows": 100}, "其它表不受影响"
 
-    # —— 断言: 被设为 None ——
-    assert data_api._table_cache["etf_adj_factor"] is None, \
-        "invalidate_data_cache('etf_adj_factor') 后 _table_cache['etf_adj_factor'] 应为 None"
+    data_api.invalidate_data_cache("etf_adj_factor", discard_stale=True)
+    snap2 = cache.snapshot(loads, is_busy=lambda: True)
+    assert snap2["etf_adj_factor"] is None, "discard_stale=True 应丢弃旧值"
+    assert snap2["daily"] == {"rows": 100}, "其它表仍不受影响"
 
 
 # ──────────────────────────────────────────────────────────
