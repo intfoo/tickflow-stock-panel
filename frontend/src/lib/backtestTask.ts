@@ -260,7 +260,7 @@ export function startBacktest(params: {
   // no-op, 但同 key 场景必须在覆盖键前区分开)。
   const prevQs = localStorage.getItem(RECONNECT_KEY)
   if (prevQs && prevQs !== qs) {
-    void fetch('/api/backtest/strategy/cancel', {
+    void fetch(`${API_BASE}/api/backtest/strategy/cancel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ qs: prevQs }),

@@ -21,6 +21,7 @@ import { useEffect, useRef, type ComponentType } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import type { ClassValue } from 'clsx'
 import { loadFrontendExtensions } from './registry'
+import { API_BASE } from '@/lib/api'
 import type { FrontendExtension, FrontendExtensionModule } from './types'
 import type { StockPreviewUi } from './stockPreview'
 
@@ -68,7 +69,7 @@ export interface RuntimePageMeta {
 
 /** 产物分发 URL: 同源相对路径, dev(vite 代理)/生产(后端直挂)/桌面端一致。 */
 export function runtimeBundleUrl(id: string): string {
-  return `/api/ext-pages/${id}/bundle.js`
+  return `${API_BASE}/api/ext-pages/${id}/bundle.js`
 }
 
 // ── 图标名白名单: 控制宿主侧 lucide 引入面(全量引入会膨胀主包) ──
@@ -133,7 +134,7 @@ export function packToExtension(pack: unknown): FrontendExtension {
 }
 
 async function defaultFetchList(): Promise<RuntimePageMeta[]> {
-  const res = await fetch('/api/ext-pages')
+  const res = await fetch(`${API_BASE}/api/ext-pages`)
   if (!res.ok) throw new Error(`ext-pages ${res.status}`)
   return res.json() as Promise<RuntimePageMeta[]>
 }

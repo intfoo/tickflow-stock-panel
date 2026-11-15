@@ -17,6 +17,7 @@ import {
 } from './client'
 import { mergeSessions } from './sessionsMerge'
 import { hydrateUiPrefs, setUiPref } from '@/lib/uiPrefs'
+import { API_BASE } from '@/lib/api'
 
 /**
  * running=执行中; awaiting=动作工具等待用户确认; approved/denied=用户已点
@@ -64,7 +65,7 @@ interface AssistantState {
 }
 
 const STORAGE_KEY = 'assistant.sessions.v1'
-const SESSIONS_URL = '/api/custom/assistant/sessions'
+const SESSIONS_URL = `${API_BASE}/api/custom/assistant/sessions`
 const SERVER_SYNC_DEBOUNCE_MS = 1500
 const MAX_SESSIONS = 20
 const MAX_SESSION_MESSAGES = 200

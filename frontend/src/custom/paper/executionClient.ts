@@ -1,5 +1,5 @@
 /** 扩展专用端点和查询键；原模拟仓继续复用 lib/api 与 QK.paper*。 */
-import { ApiError } from '@/lib/api'
+import { ApiError, API_BASE } from '@/lib/api'
 export interface ExecutionSource {
   strategy_id?: string
   candidate_id?: string
@@ -46,7 +46,7 @@ async function request<T>(account: string, endpoint: string, method = 'GET', bod
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), 30_000)
   try {
-    const response = await fetch(`/api/custom/paper-execution/${endpoint}?account=${encodeURIComponent(account)}`, {
+    const response = await fetch(`${API_BASE}/api/custom/paper-execution/${endpoint}?account=${encodeURIComponent(account)}`, {
       method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal,
     })

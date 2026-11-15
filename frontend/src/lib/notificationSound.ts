@@ -9,6 +9,8 @@
  * - none:   无声
  */
 
+import { API_BASE } from './api'
+
 let _audioCtx: AudioContext | null = null
 
 function getCtx(): AudioContext | null {
@@ -166,7 +168,7 @@ export const CUSTOM_SOUND_PREFIX = 'custom:'
 
 export function customSoundUrl(key: string): string {
   const filename = key.slice(CUSTOM_SOUND_PREFIX.length)
-  return `/api/settings/sound-packs/${encodeURIComponent(filename)}/file`
+  return `${API_BASE}/api/settings/sound-packs/${encodeURIComponent(filename)}/file`
 }
 
 /** 播放用户上传的音频 (HTMLAudioElement 即取即播, 失败静默) */

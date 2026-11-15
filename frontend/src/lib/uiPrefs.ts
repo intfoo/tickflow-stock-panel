@@ -16,8 +16,9 @@
  * 任何 ui_prefs) 本地值全部上推, 完成从 localStorage-only 到双写的迁移。
  * 策略池和主题优先恢复已有后端副本，防止旧端口恢复过时设置；本会话的新修改仍优先。
  */
+import { API_BASE } from './api'
 
-const ENDPOINT = '/api/settings/preferences/ui-prefs'
+const ENDPOINT = `${API_BASE}/api/settings/preferences/ui-prefs`
 
 type Codec = 'bool01' | 'int' | 'float' | 'string' | 'json'
 
@@ -140,7 +141,7 @@ async function _doHydrate(): Promise<void> {
     try { before.set(key, localStorage.getItem(key)) } catch { before.set(key, null) }
   }
   try {
-    const res = await fetch('/api/settings/preferences', {
+    const res = await fetch(`${API_BASE}/api/settings/preferences`, {
       headers: { Accept: 'application/json' },
     })
     if (!res.ok) {

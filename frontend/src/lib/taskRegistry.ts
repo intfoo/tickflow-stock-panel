@@ -6,6 +6,8 @@
  * id = kind + 参数指纹 (djb2 of payload JSON): 任意设备对同一任务幂等更新。
  * 调用频率: 每个任务生命周期 2 次写 (running + 终态), 页面挂载 1 次读, 可忽略。
  */
+import { API_BASE } from './api'
+
 export type TaskRegistryKind = 'backtest' | 'mining' | 'walkforward' | 'robust_optimizer'
 export type TaskRegistryStatus = 'running' | 'done' | 'error'
 
@@ -38,7 +40,7 @@ async function report(
   label = '',
 ): Promise<void> {
   try {
-    await fetch(`/api/task-registry/${encodeURIComponent(taskId(kind, payload))}`, {
+    await fetch(`${API_BASE}/api/task-registry/${encodeURIComponent(taskId(kind, payload))}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind, status, label, payload }),
@@ -68,7 +70,7 @@ export async function fetchRunningTask(
   kind: TaskRegistryKind,
 ): Promise<RegistryTask | null> {
   try {
-    const resp = await fetch(`/api/task-registry?kind=${kind}`)
+    const resp = await fetch(`${API_BASE}/api/task-registry?kind=${kind}`)
     if (!resp.ok) return null
     const data = await resp.json() as { items?: RegistryTask[] }
     const items = (data.items ?? []).filter(i => i?.kind === kind && i?.status === 'running')

@@ -6,9 +6,12 @@ import { useSearchParams } from 'react-router-dom'
 import { ScrollText, ExternalLink, CheckCircle2, Download, RefreshCw, Sparkles, Scale, Heart, Rocket, X } from 'lucide-react'
 import { useVersion } from '@/lib/useSharedQueries'
 import { useUpdateCheck } from '@/lib/updateCheck'
+import { API_BASE } from '@/lib/api'
 import { Modal } from '@/components/Modal'
 import { OssLicenseDialog, LicenseComplianceNotice } from '@/components/OssLicenseDialog'
 import { PROJECT_LICENSE_NAME, PROJECT_REPO_URL } from '@/data/ossLicenses'
+
+const DONATE_IMG = `${API_BASE}/donate-wechat.jpg`
 
 export function SettingsAboutPanel() {
   const { data: versionData } = useVersion()
@@ -92,8 +95,8 @@ export function SettingsAboutPanel() {
           </p>
           <p className="mt-1">Copyright (с) 2025 TradingView, Inc.</p>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-            <a href="/third-party/lightweight-charts/LICENSE" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground">Apache-2.0 许可</a>
-            <a href="/third-party/lightweight-charts/NOTICE" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground">NOTICE</a>
+            <a href={`${API_BASE}/third-party/lightweight-charts/LICENSE`} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground">Apache-2.0 许可</a>
+            <a href={`${API_BASE}/third-party/lightweight-charts/NOTICE`} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground">NOTICE</a>
           </div>
         </div>
 
@@ -203,7 +206,7 @@ export function SettingsAboutPanel() {
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
-                onClick={() => setQrZoom({ src: '/donate-wechat.jpg', alt: '微信赞赏码', caption: '微信扫一扫 · 赞赏支持' })}
+                onClick={() => setQrZoom({ src: DONATE_IMG, alt: '微信赞赏码', caption: '微信扫一扫 · 赞赏支持' })}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn text-xs
                            bg-accent text-white hover:bg-accent/90 transition-colors"
               >
@@ -218,13 +221,13 @@ export function SettingsAboutPanel() {
 
           {/* 右: 微信赞赏码 (白底保证二维码可扫) */}
           <button
-            onClick={() => setQrZoom({ src: '/donate-wechat.jpg', alt: '微信赞赏码', caption: '微信扫一扫 · 赞赏支持' })}
+            onClick={() => setQrZoom({ src: DONATE_IMG, alt: '微信赞赏码', caption: '微信扫一扫 · 赞赏支持' })}
             title="点击放大"
             className="group shrink-0 rounded-lg border border-border bg-white p-2
                        hover:border-accent/40 transition-colors"
           >
             <img
-              src="/donate-wechat.jpg"
+              src={DONATE_IMG}
               alt="微信赞赏码"
               className="h-28 w-28 object-contain"
             />
