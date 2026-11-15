@@ -42,12 +42,10 @@ import {
   Moon,
   X,
   WifiOff,
-  LineChart,
   Menu,
   PanelLeft,
   PanelLeftClose,
   PanelLeftOpen,
-  GitBranch,
   Download,
   HardDriveDownload,
 } from 'lucide-react'

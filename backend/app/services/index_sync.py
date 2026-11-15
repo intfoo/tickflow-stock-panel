@@ -390,11 +390,17 @@ def etf_adj_sync_start(
 
 
 def etf_adj_factor_window_start(adj_path, history_start: datetime) -> datetime:
-    """ETF 除权拉取窗口起点。
+    """ETF 除权拉取窗口起点 (兼容保留, 生产路径请用 etf_adj_sync_start)
 
     本地还没有因子文件时与日K历史对齐 (调用方传入 today-365 或最早分区日),
     不要只拉最近 30 天: 拆分落在窗口外则全年日K都不复权。已有文件则从最新
     事件日续拉。
+
+    合并 main v0.3.37 后, daily_pipeline.run_now 的 ETF 因子同步已改用
+    etf_adj_sync_start: 它在因子表缺失或被股票行污染时回退到 ETF 日K最早
+    日期做全历史回补, 并额外带 15 天回看兜底, 语义比本函数更保守; 本函数
+    仅作为上游兼容入口与对应回归测试保留, 新代码不要调用, 以免漏掉停机
+    期间新产生的除权事件
     """
     if not adj_path.exists():
         return history_start

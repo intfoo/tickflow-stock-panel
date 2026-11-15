@@ -1,5 +1,6 @@
 import { useEffect, useRef, useMemo, useState } from 'react'
 import { chartTheme, getTheme, useTheme } from '@/lib/theme'
+import { getColorMode } from '@/lib/colorMode'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import { Maximize2, Minimize2 } from 'lucide-react'
@@ -7,13 +8,13 @@ import { storage } from '@/lib/storage'
 import {
   SUB_CHARTS,
   fmtVol,
-  volumeRatioAt,
   fmtVolumeRatio,
   INFO_BAR_H,
   SUB_GAP_PX,
   type OHLC,
   type VolumeCompareConfig,
 } from '@/components/EChartsCandlestick'
+import { volumeRatioAt } from '@/lib/chart-indicators'
 
 /**
  * 缠论分析专用 K 线图表。
@@ -42,8 +43,8 @@ const THEME = {
   ma60: '#8B5CF6',
 }
 
-/** 当前主题的图表调色板 */
-const CT = () => chartTheme(getTheme())
+/** 当前主题的图表调色板 (显式传 colorMode, 与 EChartsCandlestick 口径一致) */
+const CT = () => chartTheme(getTheme(), getColorMode())
 
 // ===== 开关组配置 =====
 interface ToggleKey {
